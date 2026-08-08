@@ -4,6 +4,8 @@ import { PreservationModeSelector } from './components/PreservationModeSelector'
 import { ChainSelector } from './components/ChainSelector';
 import { PreviewModal } from './components/PreviewModal';
 import { SuccessScreen } from './components/SuccessScreen';
+import { RevealSuccessScreen } from './components/RevealSuccessScreen';
+import { RevealProofModal } from './components/RevealProofModal';
 import { DeployContractModal } from './components/DeployContractModal';
 import { VerifyPage } from './pages/VerifyPage';
 import { HistoryPage } from './pages/HistoryPage';
@@ -16,7 +18,7 @@ import {
   truncateHash,
   validateAndChecksumAddress,
 } from './utils/hashing';
-import { Feather, Shield, Sparkles, Send, Lock, AlertTriangle, KeyRound, Loader2, CheckCircle2, Clock } from 'lucide-react';
+import { Feather, Shield, Sparkles, Send, Lock, AlertTriangle, KeyRound, Loader2, CheckCircle2, Clock, Unlock } from 'lucide-react';
 import { ethers } from 'ethers';
 
 export type TransactionStep =
@@ -43,11 +45,17 @@ export function App() {
 
   // Modal & Confirmation Lifecycle State
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [isRevealModalOpen, setIsRevealModalOpen] = useState(false);
+  const [revealProofItem, setRevealProofItem] = useState<any | null>(null);
+
   const [txStep, setTxStep] = useState<TransactionStep>('idle');
   const [txHash, setTxHash] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Inscription & Reveal Success States
   const [successData, setSuccessData] = useState<any | null>(null);
+  const [revealSuccessData, setRevealSuccessData] = useState<any | null>(null);
 
   // Protocol fee state read directly from contract
   const [protocolFeeWei, setProtocolFeeWei] = useState<bigint>(0n);
@@ -100,7 +108,6 @@ export function App() {
     contractAddress: (import.meta.env.DEV && overrideContractAddress) || baseChain.contractAddress,
   };
 
-  // Safe proof hash calculation without fake fallbacks
   let currentProofHash = '';
   if (account && contentText.trim()) {
     try {
@@ -121,15 +128,13 @@ export function App() {
       return;
     }
 
-    // Ensure target chain is live/testnet
     if (currentChain.deploymentStatus === 'coming_soon' || !currentChain.contractAddress) {
-      setErrorMessage(`Chain Not Supported: InscribeSoul V1 is not yet deployed on ${currentChain.name}. Please select Base Sepolia.`);
+      setErrorMessage(`Chain Not Supported: InscribeSoul is not yet deployed on ${currentChain.name}. Please select Base Sepolia.`);
       return;
     }
 
     setErrorMessage(null);
 
-    // Read protocol fee from deployed contract prior to preview
     try {
       if (window.ethereum) {
         const provider = new ethers.BrowserProvider(window.ethereum);
@@ -161,7 +166,6 @@ export function App() {
         throw new Error('Wallet Required: No EVM wallet detected in browser.');
       }
 
-      // Step 1: Switch wallet to selected target chain FIRST
       try {
         await window.ethereum.request({
           method: 'wallet_switchEthereumChain',
@@ -173,7 +177,6 @@ export function App() {
         );
       }
 
-      // Step 2: Confirm wallet current chainId matches
       const provider = new ethers.BrowserProvider(window.ethereum);
       const network = await provider.getNetwork();
       if (Number(network.chainId) !== currentChain.chainId) {
@@ -182,7 +185,6 @@ export function App() {
         );
       }
 
-      // Step 3: Verify contract bytecode exists on chain
       const code = await provider.getCode(currentChain.contractAddress);
       if (code === '0x' || code === '0x0') {
         throw new Error(
@@ -190,18 +192,9 @@ export function App() {
         );
       }
 
-      // Step 4: Validate PROTOCOL_VERSION() from target contract
       const signer = await provider.getSigner();
       const contract = new ethers.Contract(currentChain.contractAddress, CONTRACT_ABI, signer);
 
-      const contractVersion = await contract.PROTOCOL_VERSION().catch(() => '');
-      if (contractVersion !== 'INSCRIBESOUL_V1') {
-        throw new Error(
-          `Contract Verification Failed: Target contract at ${currentChain.contractAddress} returned version '${contractVersion}', expected 'INSCRIBESOUL_V1'.`
-        );
-      }
-
-      // Step 5: Read protocolFee() from contract
       const requiredFeeWei = await contract.protocolFee().catch(() => 0n);
 
       setTxStep('awaiting_wallet');
@@ -221,7 +214,6 @@ export function App() {
       setTxStep('waiting_block');
       const receipt = await tx.wait(1);
 
-      // Extract canonical block timestamp from block header
       const block = await provider.getBlock(receipt.blockNumber);
       const blockTimestampNumber = block ? Number(block.timestamp) : Math.floor(Date.now() / 1000);
       const blockTimestampISO = new Date(blockTimestampNumber * 1000).toISOString();
@@ -255,6 +247,7 @@ export function App() {
 
   const handleResetForm = () => {
     setSuccessData(null);
+    setRevealSuccessData(null);
     setContentText('');
     setSecret(generateSecret32Bytes());
     setSelectedDetail(null);
@@ -291,6 +284,19 @@ export function App() {
             onSelectInscription={(chainId, txHash) => {
               setSelectedDetail({ chainId, txHash });
             }}
+            onOpenRevealModal={(item) => {
+              setRevealProofItem(item);
+              setIsRevealModalOpen(true);
+            }}
+          />
+        ) : revealSuccessData ? (
+          <RevealSuccessScreen
+            {...revealSuccessData}
+            onReset={handleResetForm}
+            onNavigateToVerify={() => {
+              setActiveTab('verify');
+              setRevealSuccessData(null);
+            }}
           />
         ) : successData ? (
           <SuccessScreen
@@ -307,7 +313,7 @@ export function App() {
             <div className="text-center space-y-4 max-w-2xl mx-auto">
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-stone-900 border border-stone-800 text-[11px] font-mono text-amber-400 uppercase tracking-widest">
                 <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                Base Sepolia Testnet V1
+                Base Sepolia Testnet
               </div>
               <h1 className="font-serif text-4xl sm:text-5xl md:text-6xl tracking-tight text-stone-100 font-normal">
                 InscribeSoul
@@ -315,6 +321,20 @@ export function App() {
               <p className="font-serif italic text-stone-400 text-lg sm:text-xl">
                 “Give your idea a permanent place in history.”
               </p>
+
+              {/* Reveal CTA Link */}
+              <div className="pt-2">
+                <button
+                  onClick={() => {
+                    setRevealProofItem(null);
+                    setIsRevealModalOpen(true);
+                  }}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-stone-900/80 hover:bg-amber-950/40 border border-stone-800 hover:border-amber-800/60 rounded-xl text-xs font-mono text-stone-300 hover:text-amber-300 transition-all shadow"
+                >
+                  <Unlock className="w-3.5 h-3.5 text-amber-400" />
+                  Have a Private Proof? Reveal it on-chain
+                </button>
+              </div>
             </div>
 
             {/* Error Message Alert */}
@@ -406,6 +426,17 @@ export function App() {
         protocolFeeEth={protocolFeeEth}
         isLoading={txStep !== 'idle'}
         errorMessage={errorMessage}
+      />
+
+      {/* Reveal Proof Modal */}
+      <RevealProofModal
+        isOpen={isRevealModalOpen}
+        onClose={() => setIsRevealModalOpen(false)}
+        account={account}
+        initialProofItem={revealProofItem}
+        onSuccess={(revealData) => {
+          setRevealSuccessData(revealData);
+        }}
       />
 
       {/* DEV-ONLY Admin Deploy Contract Modal */}

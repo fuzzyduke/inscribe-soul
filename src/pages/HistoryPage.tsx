@@ -1,19 +1,21 @@
 import React, { useEffect, useState } from 'react';
-import { SUPPORTED_CHAINS } from '../config/chains';
+import { SUPPORTED_CHAINS, CONTRACT_ABI } from '../config/chains';
 import { truncateHash } from '../utils/hashing';
-import { History, ShieldCheck, Eye, ExternalLink, RefreshCw } from 'lucide-react';
+import { History, ShieldCheck, Eye, ExternalLink, RefreshCw, Unlock, CheckCircle2 } from 'lucide-react';
 import { ethers } from 'ethers';
 
 interface HistoryPageProps {
   account: string | null;
   connectWallet: () => void;
   onSelectInscription: (chain: string, txHash: string) => void;
+  onOpenRevealModal?: (item: any) => void;
 }
 
 export const HistoryPage: React.FC<HistoryPageProps> = ({
   account,
   connectWallet,
   onSelectInscription,
+  onOpenRevealModal,
 }) => {
   const [inscriptions, setInscriptions] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -28,17 +30,16 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
 
       for (const chainKey of Object.keys(SUPPORTED_CHAINS)) {
         const chain = SUPPORTED_CHAINS[chainKey];
+        if (!chain.contractAddress) continue;
+
         try {
           const provider = new ethers.JsonRpcProvider(chain.rpcUrl, undefined, { staticNetwork: true });
           const currentBlock = await provider.getBlockNumber().catch(() => 0);
           if (!currentBlock) continue;
 
-          const iface = new ethers.Interface([
-            "event PublicInscription(address indexed author, bytes32 indexed proofHash, string content, uint256 timestamp)",
-            "event PrivateProof(address indexed author, bytes32 indexed commitmentHash, uint256 timestamp)"
-          ]);
+          const iface = new ethers.Interface(CONTRACT_ABI);
 
-          // Fetch Public Inscriptions
+          // 1. Fetch Public Inscriptions
           const publicFilter = {
             address: chain.contractAddress,
             topics: [
@@ -50,7 +51,6 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
           };
 
           const publicLogs = await provider.getLogs(publicFilter).catch(async () => {
-            // Fallback for RPCs enforcing 2000 block max query range
             const fallbackFromBlock = Math.max(0, currentBlock - 1999);
             return await provider.getLogs({ ...publicFilter, fromBlock: fallbackFromBlock }).catch(() => []);
           });
@@ -74,7 +74,43 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
             } catch (e) {}
           }
 
-          // Fetch Private Proofs
+          // 2. Fetch ProofRevealed Events
+          const revealedCommitments = new Map<string, any>();
+          const revealFilter = {
+            address: chain.contractAddress,
+            topics: [
+              iface.getEvent("ProofRevealed")?.topicHash,
+              ethers.zeroPadValue(cleanAccount, 32),
+            ],
+            fromBlock: 0,
+            toBlock: 'latest',
+          };
+
+          const revealLogs = await provider.getLogs(revealFilter).catch(async () => {
+            const fallbackFromBlock = Math.max(0, currentBlock - 1999);
+            return await provider.getLogs({ ...revealFilter, fromBlock: fallbackFromBlock }).catch(() => []);
+          });
+
+          for (const log of revealLogs) {
+            try {
+              const parsed = iface.parseLog(log);
+              if (parsed) {
+                const origCommit = parsed.args.originalCommitmentHash.toLowerCase();
+                // Store earliest reveal log
+                if (!revealedCommitments.has(origCommit)) {
+                  revealedCommitments.set(origCommit, {
+                    revealTxHash: log.transactionHash,
+                    revealBlockNumber: log.blockNumber,
+                    revealTimestamp: new Date(Number(parsed.args.timestamp) * 1000).toLocaleDateString(),
+                    content: parsed.args.content,
+                    secret: parsed.args.secret,
+                  });
+                }
+              }
+            } catch (e) {}
+          }
+
+          // 3. Fetch Private Proofs
           const privateFilter = {
             address: chain.contractAddress,
             topics: [
@@ -94,15 +130,20 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
             try {
               const parsed = iface.parseLog(log);
               if (parsed) {
+                const commitHash = parsed.args.commitmentHash;
+                const revealData = revealedCommitments.get(commitHash.toLowerCase());
+
                 records.push({
                   chain: chain.name,
                   chainId: chain.id,
                   mode: 'private',
                   author: parsed.args.author,
-                  contentHash: parsed.args.commitmentHash,
+                  contentHash: commitHash,
                   timestamp: new Date(Number(parsed.args.timestamp) * 1000).toLocaleDateString(),
                   txHash: log.transactionHash,
                   blockNumber: log.blockNumber,
+                  isRevealed: !!revealData,
+                  revealData: revealData || null,
                 });
               }
             } catch (e) {}
@@ -176,7 +217,7 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
         <div className="py-12 text-center text-stone-500 font-mono text-xs bg-stone-900/40 rounded-2xl border border-stone-800 p-8 space-y-3">
           <p>No inscriptions found for wallet address {account}.</p>
           <p className="text-stone-400 text-[11px]">
-            If you deployed a fresh custom contract or completed a testnet transaction recently, click Refresh above.
+            If you completed a testnet transaction recently, click Refresh above.
           </p>
         </div>
       ) : (
@@ -184,16 +225,18 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
           {inscriptions.map((item, idx) => (
             <div
               key={idx}
-              onClick={() => onSelectInscription(item.chainId, item.txHash)}
-              className="p-4 bg-stone-900/60 hover:bg-stone-900 border border-stone-800 hover:border-amber-800/60 rounded-xl transition-all cursor-pointer flex flex-col md:flex-row md:items-center justify-between gap-4"
+              className="p-4 bg-stone-900/60 hover:bg-stone-900 border border-stone-800 hover:border-amber-800/60 rounded-xl transition-all flex flex-col md:flex-row md:items-center justify-between gap-4"
             >
-              <div className="flex items-center gap-3">
+              <div 
+                onClick={() => onSelectInscription(item.chainId, item.txHash)}
+                className="flex items-center gap-3 cursor-pointer flex-1"
+              >
                 {item.mode === 'private' ? (
-                  <div className="w-8 h-8 rounded-lg bg-amber-950/60 border border-amber-800 flex items-center justify-center text-amber-400">
+                  <div className="w-8 h-8 rounded-lg bg-amber-950/60 border border-amber-800 flex items-center justify-center text-amber-400 shrink-0">
                     <ShieldCheck className="w-4 h-4" />
                   </div>
                 ) : (
-                  <div className="w-8 h-8 rounded-lg bg-stone-800 border border-stone-700 flex items-center justify-center text-stone-400">
+                  <div className="w-8 h-8 rounded-lg bg-stone-800 border border-stone-700 flex items-center justify-center text-stone-400 shrink-0">
                     <Eye className="w-4 h-4" />
                   </div>
                 )}
@@ -203,6 +246,17 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
                     <span className="text-[10px] px-2 py-0.5 rounded bg-stone-950 text-stone-400 border border-stone-800">
                       {item.chain}
                     </span>
+                    {item.mode === 'private' && (
+                      item.isRevealed ? (
+                        <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950 border border-emerald-800 text-emerald-300 font-bold flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3" /> REVEALED ✓
+                        </span>
+                      ) : (
+                        <span className="text-[10px] px-2 py-0.5 rounded bg-amber-950/40 border border-amber-900/60 text-amber-400">
+                          SEALED
+                        </span>
+                      )
+                    )}
                   </div>
                   <p className="text-[11px] text-stone-400 mt-0.5">
                     Hash: {truncateHash(item.contentHash, 10, 8)}
@@ -210,12 +264,32 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
                 </div>
               </div>
 
-              <div className="flex items-center gap-4 text-right">
-                <div className="text-[11px] text-stone-400">
+              <div className="flex items-center gap-3 text-right">
+                <div className="text-[11px] text-stone-400 mr-2">
                   <p>{item.timestamp}</p>
                   <p className="text-stone-500 text-[10px]">Block #{item.blockNumber}</p>
                 </div>
-                <ExternalLink className="w-4 h-4 text-stone-500" />
+
+                {item.mode === 'private' && !item.isRevealed && onOpenRevealModal && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenRevealModal(item);
+                    }}
+                    className="px-3 py-1.5 bg-amber-900/60 hover:bg-amber-800 border border-amber-700 text-amber-200 text-[11px] font-mono uppercase tracking-wider rounded-lg transition-all flex items-center gap-1.5 shadow"
+                  >
+                    <Unlock className="w-3.5 h-3.5" />
+                    Reveal
+                  </button>
+                )}
+
+                <button
+                  onClick={() => onSelectInscription(item.chainId, item.txHash)}
+                  className="p-2 bg-stone-800 hover:bg-stone-700 text-stone-300 rounded-lg transition-all"
+                  title="View Inscription Details"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                </button>
               </div>
             </div>
           ))}

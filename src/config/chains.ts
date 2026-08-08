@@ -84,6 +84,8 @@ export const CONTRACT_ABI = [
   "function MAX_PROTOCOL_FEE() external view returns (uint256)",
   "function inscribePublic(string calldata content) external payable",
   "function inscribeProof(bytes32 commitmentHash) external payable",
+  "function revealProof(bytes32 originalCommitmentHash, bytes32 originalTransactionHash, bytes32 secret, string calldata content) external payable",
   "event PublicInscription(address indexed author, bytes32 indexed proofHash, string content, uint256 timestamp)",
-  "event PrivateProof(address indexed author, bytes32 indexed commitmentHash, uint256 timestamp)"
+  "event PrivateProof(address indexed author, bytes32 indexed commitmentHash, uint256 timestamp)",
+  "event ProofRevealed(address indexed author, bytes32 indexed originalCommitmentHash, bytes32 indexed originalTransactionHash, bytes32 secret, string content, uint256 timestamp)"
 ];

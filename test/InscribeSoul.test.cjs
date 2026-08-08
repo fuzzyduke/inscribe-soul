@@ -41,7 +41,7 @@ describe("InscribeSoul Protocol Hardening V1 Security Suite", function () {
 
   describe("Contract Constants & Setup", function () {
     it("1. Should return correct domain separators and protocol version", async function () {
-      expect(await contract.PROTOCOL_VERSION()).to.equal("INSCRIBESOUL_V1");
+      expect(await contract.PROTOCOL_VERSION()).to.equal("INSCRIBESOUL_V1_1");
       expect(await contract.PUBLIC_DOMAIN()).to.equal(PUBLIC_DOMAIN);
       expect(await contract.PRIVATE_DOMAIN()).to.equal(PRIVATE_DOMAIN);
     });

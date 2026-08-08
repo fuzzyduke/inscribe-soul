@@ -51,7 +51,7 @@ describe("InscribeSoul Production Integrity Hardening Suite (Items 1-15)", funct
   });
 
   it("3. Contract validation checks: PROTOCOL_VERSION, PUBLIC_DOMAIN, PRIVATE_DOMAIN", async function () {
-    expect(await contract.PROTOCOL_VERSION()).to.equal("INSCRIBESOUL_V1");
+    expect(await contract.PROTOCOL_VERSION()).to.equal("INSCRIBESOUL_V1_1");
     expect(await contract.PUBLIC_DOMAIN()).to.equal(PUBLIC_DOMAIN);
     expect(await contract.PRIVATE_DOMAIN()).to.equal(PRIVATE_DOMAIN);
   });
