@@ -443,6 +443,9 @@ export function App() {
         account={account}
         initialProofItem={revealProofItem}
         onSuccess={(revealData) => {
+          setActiveTab('inscribe');
+          setSelectedDetail(null);
+          setSuccessData(null);
           setRevealSuccessData(revealData);
         }}
       />
