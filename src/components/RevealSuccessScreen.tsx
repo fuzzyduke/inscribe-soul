@@ -1,7 +1,15 @@
 import React from 'react';
-import { CheckCircle2, Download, ExternalLink, Copy, Unlock, FileText, ArrowRight, ShieldCheck } from 'lucide-react';
+import { CheckCircle2, ExternalLink, Copy, Unlock } from 'lucide-react';
 import { truncateHash } from '../utils/hashing';
 import { ChainConfig } from '../config/chains';
+
+export interface VerificationState {
+  originalEventFound: boolean;
+  commitmentMatches: boolean;
+  authorMatches: boolean;
+  canonicalContractVerified: boolean;
+  originalPredatesReveal: boolean;
+}
 
 interface RevealSuccessScreenProps {
   chain: ChainConfig;
@@ -16,12 +24,7 @@ interface RevealSuccessScreenProps {
   secret: string;
   content: string;
   label?: string;
-  verifications?: {
-    originalEventFound: boolean;
-    commitmentMatches: boolean;
-    authorMatches: boolean;
-    canonicalContractVerified: boolean;
-  };
+  verifications: VerificationState; // Item 7: Mandatory verifications prop with zero optimistic true defaults
   onReset: () => void;
   onNavigateToVerify: () => void;
 }
@@ -39,12 +42,7 @@ export const RevealSuccessScreen: React.FC<RevealSuccessScreenProps> = ({
   secret,
   content,
   label,
-  verifications = {
-    originalEventFound: true,
-    commitmentMatches: true,
-    authorMatches: true,
-    canonicalContractVerified: true,
-  },
+  verifications,
   onReset,
   onNavigateToVerify,
 }) => {
@@ -55,6 +53,14 @@ export const RevealSuccessScreen: React.FC<RevealSuccessScreenProps> = ({
     navigator.clipboard.writeText(link);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const safeVerifications = verifications || {
+    originalEventFound: false,
+    commitmentMatches: false,
+    authorMatches: false,
+    canonicalContractVerified: false,
+    originalPredatesReveal: false,
   };
 
   return (
@@ -151,13 +157,14 @@ export const RevealSuccessScreen: React.FC<RevealSuccessScreenProps> = ({
         </p>
       </div>
 
-      {/* Verification Checklist based on actual verified booleans */}
+      {/* Verification Checklist based on actual verified booleans (No optimistic defaults) */}
       <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-800/60 font-mono text-xs text-emerald-300 space-y-1">
         <div className="font-bold text-emerald-400 uppercase text-[11px] mb-1">PROVENANCE VERIFICATION SUMMARY:</div>
-        {verifications.commitmentMatches && <div>✓ Reveal data reproduces original commitment hash</div>}
-        {verifications.originalEventFound && <div>✓ Original PrivateProof event found on {chain.name}</div>}
-        {verifications.authorMatches && <div>✓ Author wallet matches original proof</div>}
-        {verifications.canonicalContractVerified && <div>✓ Emitted by canonical InscribeSoul contract</div>}
+        {safeVerifications.commitmentMatches ? <div>✓ Reveal data reproduces original commitment hash</div> : <div className="text-red-400">✗ Commitment hash mismatch</div>}
+        {safeVerifications.originalEventFound ? <div>✓ Original PrivateProof event found on {chain.name}</div> : <div className="text-red-400">✗ Original PrivateProof event missing on-chain</div>}
+        {safeVerifications.authorMatches ? <div>✓ Author wallet matches original proof</div> : <div className="text-red-400">✗ Author wallet mismatch</div>}
+        {safeVerifications.canonicalContractVerified ? <div>✓ Emitted by approved historical/canonical contract</div> : <div className="text-red-400">✗ Contract address not in canonical registry</div>}
+        {safeVerifications.originalPredatesReveal ? <div>✓ Original commitment predates public reveal (Block #{origBlockNumber} &lt; #{revealBlockNumber})</div> : <div className="text-red-400">✗ Block height ordering violation</div>}
       </div>
 
       {/* Actions */}

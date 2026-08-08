@@ -196,7 +196,12 @@ export function App() {
       const signer = await provider.getSigner();
       const contract = new ethers.Contract(currentChain.contractAddress, CONTRACT_ABI, signer);
 
-      const requiredFeeWei = await contract.protocolFee().catch(() => 0n);
+      let requiredFeeWei: bigint;
+      try {
+        requiredFeeWei = await contract.protocolFee();
+      } catch (feeErr) {
+        throw new Error(`Unable to determine the current InscribeSoul protocol fee on ${currentChain.name}. Please retry when network connection is available.`);
+      }
 
       setTxStep('awaiting_wallet');
       setStatusMessage('Awaiting wallet signature approval...');
@@ -216,7 +221,10 @@ export function App() {
       const receipt = await tx.wait(1);
 
       const block = await provider.getBlock(receipt.blockNumber);
-      const blockTimestampNumber = block ? Number(block.timestamp) : Math.floor(Date.now() / 1000);
+      if (!block || !block.timestamp) {
+        throw new Error(`Transaction Confirmed, but canonical block header for #${receipt.blockNumber} is temporarily unavailable from RPC.`);
+      }
+      const blockTimestampNumber = Number(block.timestamp);
       const blockTimestampISO = new Date(blockTimestampNumber * 1000).toISOString();
 
       setTxStep('confirmed');

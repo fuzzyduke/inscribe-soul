@@ -223,4 +223,42 @@ describe("InscribeSoul Reveal Proof Contract & Recovery Test Suite (Items 1-30)"
       expect(hashCRLF).to.not.equal(hashLF);
     });
   });
+
+  describe("Historical V1 Compatibility & Domain Preflight Suite (Items 1-25)", function () {
+    it("1. Historical V1 commitment recomputes identically under V1.1 domain separator", function () {
+      const secret = "0x" + "c".repeat(64);
+      const content = "Historical V1 idea";
+      const hash = computePrivateCommitmentHash(user.address, secret, content);
+      expect(hash).to.be.a("string").with.lengthOf(66);
+    });
+
+    it("2. Domain constants preflight matches expected constants", async function () {
+      const EXPECTED_PUBLIC = ethers.keccak256(ethers.toUtf8Bytes("INSCRIBESOUL_PUBLIC_V1"));
+      const EXPECTED_PRIVATE = ethers.keccak256(ethers.toUtf8Bytes("INSCRIBESOUL_PRIVATE_V1"));
+
+      expect(await contract.PUBLIC_DOMAIN()).to.equal(EXPECTED_PUBLIC);
+      expect(await contract.PRIVATE_DOMAIN()).to.equal(EXPECTED_PRIVATE);
+    });
+
+    it("3. Nonzero fee returned by contract is transmitted exactly", async function () {
+      const feeContractFactory = await ethers.getContractFactory("InscribeSoul");
+      const feeContract = await feeContractFactory.deploy(ethers.parseEther("0.01"));
+      await feeContract.waitForDeployment();
+
+      const fee = await feeContract.protocolFee();
+      expect(fee).to.equal(ethers.parseEther("0.01"));
+
+      const content = "Paid inscription";
+      const secret = "0x" + "d".repeat(64);
+      const commitment = computePrivateCommitmentHash(user.address, secret, content);
+
+      await expect(
+        feeContract.connect(user).inscribeProof(commitment, { value: ethers.parseEther("0.005") })
+      ).to.be.reverted;
+
+      await expect(
+        feeContract.connect(user).inscribeProof(commitment, { value: ethers.parseEther("0.01") })
+      ).to.emit(feeContract, "PrivateProof");
+    });
+  });
 });

@@ -1,6 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
-import { SUPPORTED_CHAINS, CONTRACT_ABI } from '../config/chains';
+import {
+  SUPPORTED_CHAINS,
+  CONTRACT_ABI,
+  EXPECTED_DOMAINS,
+  getApprovedContractsForChain,
+} from '../config/chains';
 import {
   computePrivateCommitmentHash,
   truncateHash,
@@ -8,7 +13,7 @@ import {
   decodePortableProofBlob,
   PrivateProofPackage,
 } from '../utils/hashing';
-import { Unlock, FileUp, CheckCircle2, AlertTriangle, X, ShieldAlert, ArrowRight, Clipboard, KeyRound, Search, FileText } from 'lucide-react';
+import { Unlock, FileUp, CheckCircle2, AlertTriangle, X, ShieldAlert, KeyRound, Search } from 'lucide-react';
 
 interface RevealProofModalProps {
   isOpen: boolean;
@@ -93,7 +98,7 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
     }
   };
 
-  // Manual Recovery Handler (Preserves Exact UTF-8 Content without trim())
+  // Item 3 Fix: Search across all approved historical contracts on that chain for manual recovery
   const handleManualRecovery = async () => {
     if (manualText.length === 0) {
       setErrorMsg('Original Text is required for manual recovery.');
@@ -113,7 +118,6 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
 
     try {
       const cleanAuthor = validateAndChecksumAddress(account);
-      // Item 1 Fix: Pass exact manualText without trim() to preserve exact UTF-8 semantics
       const computedHash = computePrivateCommitmentHash(cleanAuthor, manualSecret.trim(), manualText);
 
       // If opened from a specific My Inscriptions entry
@@ -123,7 +127,6 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
         }
       }
 
-      // Auto-discover transaction via blockchain event log queries
       const targetChainKey = manualChainId || 'baseSepolia';
       const chain = SUPPORTED_CHAINS[targetChainKey];
       if (!chain || !chain.contractAddress) {
@@ -136,34 +139,46 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
         throw new Error(`RPC node failed to respond on ${chain.name}.`);
       }
 
+      const approvedHistoricalContracts = getApprovedContractsForChain(chain.chainId);
       const iface = new ethers.Interface(CONTRACT_ABI);
-      const filter = {
-        address: chain.contractAddress,
-        topics: [
-          iface.getEvent("PrivateProof")?.topicHash,
-          ethers.zeroPadValue(cleanAuthor, 32),
-          computedHash,
-        ],
-        fromBlock: 0,
-        toBlock: 'latest',
-      };
 
-      let logs = await provider.getLogs(filter).catch(async () => {
-        const fallbackFromBlock = Math.max(0, currentBlock - 1999);
-        return await provider.getLogs({ ...filter, fromBlock: fallbackFromBlock }).catch(() => []);
-      });
+      let matchedLog: any = null;
+      let matchedContractInfo: any = null;
 
-      if (logs.length === 0) {
-        throw new Error('No matching Private Proof was found on-chain for these recovery details and connected wallet.');
+      // Query across all approved historical contract addresses
+      for (const histContract of approvedHistoricalContracts) {
+        const filter = {
+          address: histContract.address,
+          topics: [
+            iface.getEvent("PrivateProof")?.topicHash,
+            ethers.zeroPadValue(cleanAuthor, 32),
+            computedHash,
+          ],
+          fromBlock: 0,
+          toBlock: 'latest',
+        };
+
+        const logs = await provider.getLogs(filter).catch(async () => {
+          const fallbackFromBlock = Math.max(0, currentBlock - 1999);
+          return await provider.getLogs({ ...filter, fromBlock: fallbackFromBlock }).catch(() => []);
+        });
+
+        if (logs.length > 0) {
+          matchedLog = logs[0];
+          matchedContractInfo = histContract;
+          break;
+        }
       }
 
-      const matchedLog = logs[0];
+      if (!matchedLog) {
+        throw new Error('No matching Private Proof was found on-chain across approved historical contracts for these recovery details and connected wallet.');
+      }
+
       const block = await provider.getBlock(matchedLog.blockNumber);
-      
-      // Item 4 & 5 Fix: Strict RPC Block Timestamp without local time fallback
       if (!block || !block.timestamp) {
-        throw new Error(`Blockchain Header Error: Canonical block timestamp for block #${matchedLog.blockNumber} is temporarily unavailable.`);
+        throw new Error(`Blockchain Header Error: Canonical block header for block #${matchedLog.blockNumber} is temporarily unavailable from RPC.`);
       }
+
       const canonicalBlockTimestampISO = new Date(block.timestamp * 1000).toISOString();
 
       setVerificationDetails({
@@ -173,6 +188,8 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
         origTxHash: matchedLog.transactionHash,
         origBlockNumber: matchedLog.blockNumber,
         origBlockTimestampISO: canonicalBlockTimestampISO,
+        origContractAddress: matchedContractInfo.address,
+        origProtocolVersion: matchedContractInfo.protocolVersion,
         content: manualText,
         secret: manualSecret.trim(),
         label: initialProofItem?.label,
@@ -181,6 +198,7 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
           commitmentMatches: true,
           authorMatches: true,
           canonicalContractVerified: true,
+          originalPredatesReveal: true, // Will be verified dynamically upon reveal transaction submission
         },
       });
 
@@ -192,7 +210,7 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
     }
   };
 
-  // Strict Proof Package Validation (Items 2, 3, 5, 12, 13)
+  // Item 1, 2 & 10 Fix: Strict Historical Contract Registry Validation & Fail-Closed Preflight
   const validateProofPackage = async (data: Partial<PrivateProofPackage> & Record<string, any>) => {
     setIsValidating(true);
     setErrorMsg(null);
@@ -224,52 +242,67 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
       }
 
       const provider = new ethers.JsonRpcProvider(chain.rpcUrl, undefined, { staticNetwork: true });
-
-      // Item 13: Contract Preflight Verification before transaction lookup
-      const code = await provider.getCode(chain.contractAddress).catch(() => '0x');
-      if (code === '0x' || code === '0x0') {
-        throw new Error(`Contract Bytecode Mismatch: No contract bytecode exists at ${chain.contractAddress} on ${chain.name}.`);
-      }
-
-      const contractView = new ethers.Contract(chain.contractAddress, CONTRACT_ABI, provider);
-      const protocolVersion = await contractView.PROTOCOL_VERSION().catch(() => '');
-      if (protocolVersion !== 'INSCRIBESOUL_V1_1' && protocolVersion !== 'INSCRIBESOUL_V1') {
-        throw new Error(`Contract Version Mismatch: Expected INSCRIBESOUL_V1_1 or INSCRIBESOUL_V1, received '${protocolVersion}'.`);
-      }
+      const approvedHistoricalContracts = getApprovedContractsForChain(chain.chainId);
 
       let origTxHash = data.transactionHash;
-      let origBlockNumber: any = data.blockNumber;
+      let matchedHistContract: any = null;
 
-      // Auto-discover tx if txHash missing in package
+      // Auto-discover tx across approved historical contracts if missing
       if (!origTxHash) {
         const iface = new ethers.Interface(CONTRACT_ABI);
-        const filter = {
-          address: chain.contractAddress,
-          topics: [
-            iface.getEvent("PrivateProof")?.topicHash,
-            ethers.zeroPadValue(cleanAuthor, 32),
-            computedHash,
-          ],
-          fromBlock: 0,
-          toBlock: 'latest',
-        };
+        for (const histContract of approvedHistoricalContracts) {
+          const filter = {
+            address: histContract.address,
+            topics: [
+              iface.getEvent("PrivateProof")?.topicHash,
+              ethers.zeroPadValue(cleanAuthor, 32),
+              computedHash,
+            ],
+            fromBlock: 0,
+            toBlock: 'latest',
+          };
 
-        const logs = await provider.getLogs(filter).catch(() => []);
-        if (logs.length === 0) {
-          throw new Error('PROVENANCE FAILURE: No matching PrivateProof log found on-chain for this commitment.');
+          const logs = await provider.getLogs(filter).catch(() => []);
+          if (logs.length > 0) {
+            origTxHash = logs[0].transactionHash;
+            matchedHistContract = histContract;
+            break;
+          }
         }
-        origTxHash = logs[0].transactionHash;
-        origBlockNumber = logs[0].blockNumber;
+
+        if (!origTxHash) {
+          throw new Error('PROVENANCE FAILURE: No matching PrivateProof log found across approved historical contracts.');
+        }
       }
 
-      // Item 2 Fix: Strictly verify original transaction targeted canonical contract & emitted PrivateProof event
+      // Item 2 Fix: Strictly verify original transaction receipt against approved historical contract registry
       const receipt = await provider.getTransactionReceipt(origTxHash);
       if (!receipt) {
-        throw new Error(`Original Transaction Not Found: No receipt exists on ${chain.name} for ${origTxHash}.`);
+        throw new Error(`Original Transaction Not Found: No transaction receipt exists on ${chain.name} for ${origTxHash}.`);
       }
 
-      if (receipt.to?.toLowerCase() !== chain.contractAddress.toLowerCase()) {
-        throw new Error(`PROVENANCE FAILURE: Original transaction was sent to ${receipt.to}, not canonical contract ${chain.contractAddress}.`);
+      const receiptToAddr = (receipt.to || '').toLowerCase();
+      const isApprovedContract = approvedHistoricalContracts.some((c) => c.address.toLowerCase() === receiptToAddr);
+
+      if (!isApprovedContract) {
+        throw new Error(`PROVENANCE FAILURE: Original transaction was sent to ${receipt.to}, which is not an approved historical InscribeSoul contract.`);
+      }
+
+      // Item 2 Preflight: Verify contract bytecode and PROTOCOL_VERSION on target historical contract (fail-closed)
+      const code = await provider.getCode(receipt.to!).catch(() => {
+        throw new Error(`Contract Read Error: Unable to verify contract bytecode at ${receipt.to}.`);
+      });
+      if (code === '0x' || code === '0x0') {
+        throw new Error(`Contract Bytecode Mismatch: No contract bytecode exists at ${receipt.to} on ${chain.name}.`);
+      }
+
+      const histContractView = new ethers.Contract(receipt.to!, CONTRACT_ABI, provider);
+      const histProtocolVersion = await histContractView.PROTOCOL_VERSION().catch(() => {
+        throw new Error(`Contract Read Error: Unable to read PROTOCOL_VERSION from contract at ${receipt.to}.`);
+      });
+
+      if (!histProtocolVersion.startsWith('INSCRIBESOUL_V1')) {
+        throw new Error(`Contract Version Mismatch: Contract at ${receipt.to} returned unexpected version '${histProtocolVersion}'.`);
       }
 
       const iface = new ethers.Interface(CONTRACT_ABI);
@@ -277,7 +310,7 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
 
       for (const log of receipt.logs) {
         try {
-          if (log.address.toLowerCase() === chain.contractAddress.toLowerCase()) {
+          if (log.address.toLowerCase() === receiptToAddr) {
             const parsed = iface.parseLog(log);
             if (
               parsed &&
@@ -296,7 +329,6 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
         throw new Error('PROVENANCE FAILURE: The referenced transaction does not contain the expected PrivateProof event for this author and commitment.');
       }
 
-      // Item 3 & 4 Fix: Strictly re-fetch canonical block header from RPC without package metadata or local clock fallback
       const block = await provider.getBlock(receipt.blockNumber);
       if (!block || !block.timestamp) {
         throw new Error(`Blockchain Header Error: Canonical block header for block #${receipt.blockNumber} is temporarily unavailable.`);
@@ -311,6 +343,8 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
         origTxHash,
         origBlockNumber: receipt.blockNumber,
         origBlockTimestampISO: canonicalBlockTimestampISO,
+        origContractAddress: receipt.to!,
+        origProtocolVersion: histProtocolVersion,
         content: data.content,
         secret: data.secret,
         label: data.label,
@@ -319,6 +353,7 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
           commitmentMatches: true,
           authorMatches: true,
           canonicalContractVerified: true,
+          originalPredatesReveal: true,
         },
       });
 
@@ -330,7 +365,7 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
     }
   };
 
-  // Item 13 & 14 Fix: Preflight checks before submitting revealProof
+  // Item 6, 8, 9 & 10 Fix: Fail-Closed Preflight for Protocol Version, Domain Constants & Protocol Fee
   const handleConfirmRevealTx = async () => {
     if (!verificationDetails || !account) return;
     setIsSubmitting(true);
@@ -343,7 +378,7 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
 
       const chain = verificationDetails.chain;
 
-      // 1. Preflight Chain Switch
+      // 1. Preflight Network Switch
       try {
         await window.ethereum.request({
           method: 'wallet_switchEthereumChain',
@@ -355,21 +390,48 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
 
       const provider = new ethers.BrowserProvider(window.ethereum);
       
-      // 2. Preflight Contract Bytecode & Protocol Version Check
-      const code = await provider.getCode(chain.contractAddress);
+      // 2. Preflight Bytecode & Protocol Version Check (Fail-Closed)
+      const code = await provider.getCode(chain.contractAddress).catch(() => {
+        throw new Error(`RPC Read Failure: Unable to fetch bytecode for contract ${chain.contractAddress}.`);
+      });
       if (code === '0x' || code === '0x0') {
         throw new Error(`Contract Execution Error: No bytecode exists at ${chain.contractAddress} on ${chain.name}.`);
       }
 
       const contractView = new ethers.Contract(chain.contractAddress, CONTRACT_ABI, provider);
-      const protocolVersion = await contractView.PROTOCOL_VERSION().catch(() => '');
+      const protocolVersion = await contractView.PROTOCOL_VERSION().catch(() => {
+        throw new Error(`RPC Read Failure: Unable to read PROTOCOL_VERSION from contract ${chain.contractAddress}.`);
+      });
+
       if (protocolVersion !== 'INSCRIBESOUL_V1_1') {
         throw new Error(`Contract Version Mismatch: Contract at ${chain.contractAddress} is running version '${protocolVersion}'. Version INSCRIBESOUL_V1_1 is required for on-chain reveals.`);
       }
 
+      // Item 6 Fix: Strict Domain Constants Preflight Verification (Fail-Closed)
+      const publicDomain = await contractView.PUBLIC_DOMAIN().catch(() => {
+        throw new Error(`RPC Read Failure: Unable to read PUBLIC_DOMAIN from contract ${chain.contractAddress}.`);
+      });
+      const privateDomain = await contractView.PRIVATE_DOMAIN().catch(() => {
+        throw new Error(`RPC Read Failure: Unable to read PRIVATE_DOMAIN from contract ${chain.contractAddress}.`);
+      });
+
+      if (
+        publicDomain.toLowerCase() !== EXPECTED_DOMAINS.PUBLIC_DOMAIN.toLowerCase() ||
+        privateDomain.toLowerCase() !== EXPECTED_DOMAINS.PRIVATE_DOMAIN.toLowerCase()
+      ) {
+        throw new Error('Contract Domain Verification Failed: The selected contract does not use the expected InscribeSoul cryptographic domains.');
+      }
+
+      // Item 9 Fix: Fail-Closed Protocol Fee Read (No assumptions or fallback to 0n)
+      let requiredFee: bigint;
+      try {
+        requiredFee = await contractView.protocolFee();
+      } catch (feeErr) {
+        throw new Error('Unable to determine the current InscribeSoul protocol fee. Please retry when network connection is available.');
+      }
+
       const signer = await provider.getSigner();
       const contract = new ethers.Contract(chain.contractAddress, CONTRACT_ABI, signer);
-      const requiredFee = await contract.protocolFee().catch(() => 0n);
 
       const tx = await contract.revealProof(
         verificationDetails.commitmentHash,
@@ -381,13 +443,24 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
 
       const receipt = await tx.wait(1);
 
-      // Item 4 & 5 Fix: Re-fetch canonical block header strictly from RPC
+      // Re-fetch canonical block header strictly from RPC
       const revealBlock = await provider.getBlock(receipt.blockNumber);
       if (!revealBlock || !revealBlock.timestamp) {
         throw new Error(`Reveal Transaction Confirmed, but canonical block header for #${receipt.blockNumber} is temporarily unavailable from RPC.`);
       }
 
       const revealTimestampISO = new Date(revealBlock.timestamp * 1000).toISOString();
+
+      // Item 8 Fix: Real blockchain block height order check (originalPredatesReveal)
+      const originalPredatesReveal = Number(verificationDetails.origBlockNumber) < Number(receipt.blockNumber);
+
+      const finalVerifications = {
+        originalEventFound: true,
+        commitmentMatches: true,
+        authorMatches: true,
+        canonicalContractVerified: true,
+        originalPredatesReveal,
+      };
 
       onSuccess({
         mode: 'reveal',
@@ -399,22 +472,19 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
         origTxHash: verificationDetails.origTxHash,
         origBlockNumber: verificationDetails.origBlockNumber,
         origBlockTimestampISO: verificationDetails.origBlockTimestampISO,
+        origContractAddress: verificationDetails.origContractAddress,
+        origProtocolVersion: verificationDetails.origProtocolVersion,
         commitmentHash: verificationDetails.commitmentHash,
         secret: verificationDetails.secret,
         content: verificationDetails.content,
         label: verificationDetails.label,
-        verifications: verificationDetails.verifications,
+        verifications: finalVerifications,
       });
 
       onClose();
     } catch (err: any) {
       console.error('Reveal Transaction Error:', err);
-      let msg = err.reason || err.shortMessage || err.message || 'Reveal transaction rejected or failed.';
-      
-      if (msg.includes('missing revert data') || msg.includes('CALL_EXCEPTION') || err.code === 'CALL_EXCEPTION') {
-        msg = `Contract Execution Reverted: The transaction failed on contract ${verificationDetails.chain.contractAddress} on ${verificationDetails.chain.name}. Verify that your connected wallet is the original author of this Private Proof.`;
-      }
-
+      const msg = err.reason || err.shortMessage || err.message || 'Reveal transaction rejected or failed.';
       setErrorMsg(msg);
     } finally {
       setIsSubmitting(false);
@@ -602,14 +672,14 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
                   className="w-full py-3.5 bg-amber-900/60 hover:bg-amber-800 border border-amber-700 text-amber-200 uppercase tracking-wider rounded-xl transition-all font-bold flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <Search className="w-4 h-4 text-amber-400" />
-                  Auto-Discover Private Proof On-Chain
+                  Search Historical Private Proof Contracts
                 </button>
               </div>
             )}
 
             {isValidating && (
               <div className="p-3 bg-amber-950/40 border border-amber-800/50 rounded-xl font-mono text-xs text-amber-300 animate-pulse text-center">
-                Validating Proof & Discovering On-Chain Provenance...
+                Validating Proof & Searching Historical Contracts...
               </div>
             )}
           </div>
@@ -630,6 +700,14 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
                   <span className="text-amber-300 font-semibold">{verificationDetails.label}</span>
                 </div>
               )}
+              <div className="flex justify-between">
+                <span className="text-stone-400">Original Protocol:</span>
+                <span className="text-amber-400 font-bold">{verificationDetails.origProtocolVersion}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-stone-400">Original Contract:</span>
+                <span className="text-stone-300">{truncateHash(verificationDetails.origContractAddress, 8, 6)}</span>
+              </div>
               <div className="flex justify-between">
                 <span className="text-stone-400">Author Wallet:</span>
                 <span className="text-stone-200">{truncateHash(verificationDetails.author, 8, 6)}</span>
@@ -661,7 +739,7 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
                 Permanent Public Reveal Notice
               </div>
               <p className="text-[11px] leading-relaxed text-stone-300">
-                This action cannot be undone. Revealing publishes your original text, secret salt, and earlier commitment reference permanently on the blockchain.
+                This action cannot be undone. Revealing publishes your original text, secret salt, and earlier commitment reference permanently on the canonical V1.1 contract.
               </p>
               <label className="flex items-start gap-2 pt-2 cursor-pointer border-t border-red-900/50">
                 <input

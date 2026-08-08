@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { SUPPORTED_CHAINS, CONTRACT_ABI } from '../config/chains';
+import { SUPPORTED_CHAINS, CONTRACT_ABI, getApprovedContractsForChain } from '../config/chains';
 import { truncateHash } from '../utils/hashing';
 import { History, ShieldCheck, Eye, ExternalLink, RefreshCw, Unlock, CheckCircle2 } from 'lucide-react';
 import { ethers } from 'ethers';
@@ -38,125 +38,138 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
           if (!currentBlock) continue;
 
           const iface = new ethers.Interface(CONTRACT_ABI);
+          try {
+            const approvedContracts = getApprovedContractsForChain(chain.chainId);
 
-          // 1. Fetch Public Inscriptions
-          const publicFilter = {
-            address: chain.contractAddress,
-            topics: [
-              iface.getEvent("PublicInscription")?.topicHash,
-              ethers.zeroPadValue(cleanAccount, 32),
-            ],
-            fromBlock: 0,
-            toBlock: 'latest',
-          };
+            for (const histContract of approvedContracts) {
+              // 1. Fetch Public Inscriptions
+              const publicFilter = {
+                address: histContract.address,
+                topics: [
+                  iface.getEvent("PublicInscription")?.topicHash,
+                  ethers.zeroPadValue(cleanAccount, 32),
+                ],
+                fromBlock: 0,
+                toBlock: 'latest',
+              };
 
-          const publicLogs = await provider.getLogs(publicFilter).catch(async () => {
-            const fallbackFromBlock = Math.max(0, currentBlock - 1999);
-            return await provider.getLogs({ ...publicFilter, fromBlock: fallbackFromBlock }).catch(() => []);
-          });
+              const publicLogs = await provider.getLogs(publicFilter).catch(async () => {
+                const fallbackFromBlock = Math.max(0, currentBlock - 1999);
+                return await provider.getLogs({ ...publicFilter, fromBlock: fallbackFromBlock }).catch(() => []);
+              });
 
-          for (const log of publicLogs) {
-            try {
-              const parsed = iface.parseLog(log);
-              if (parsed) {
-                records.push({
-                  chain: chain.name,
-                  chainId: chain.id,
-                  mode: 'public',
-                  author: parsed.args.author,
-                  contentHash: parsed.args.proofHash,
-                  content: parsed.args.content,
-                  timestamp: new Date(Number(parsed.args.timestamp) * 1000).toLocaleDateString(),
-                  txHash: log.transactionHash,
-                  blockNumber: log.blockNumber,
-                });
+              for (const log of publicLogs) {
+                try {
+                  const parsed = iface.parseLog(log);
+                  if (parsed) {
+                    records.push({
+                      chain: chain.name,
+                      chainId: chain.id,
+                      mode: 'public',
+                      protocolVersion: histContract.protocolVersion,
+                      contractAddress: histContract.address,
+                      author: parsed.args.author,
+                      contentHash: parsed.args.proofHash,
+                      content: parsed.args.content,
+                      timestamp: new Date(Number(parsed.args.timestamp) * 1000).toLocaleDateString(),
+                      txHash: log.transactionHash,
+                      blockNumber: log.blockNumber,
+                    });
+                  }
+                } catch (e) {}
               }
-            } catch (e) {}
-          }
+            }
 
-          // 2. Fetch ProofRevealed Events & Index by Composite Key (commitmentHash + origTxHash + author)
-          const revealedCommitments = new Map<string, any>();
-          const revealFilter = {
-            address: chain.contractAddress,
-            topics: [
-              iface.getEvent("ProofRevealed")?.topicHash,
-              ethers.zeroPadValue(cleanAccount, 32),
-            ],
-            fromBlock: 0,
-            toBlock: 'latest',
-          };
+            // 2. Fetch ProofRevealed Events & Index by Composite Key (commitmentHash + origTxHash + author + origContract)
+            const revealedCommitments = new Map<string, any>();
+            const revealFilter = {
+              address: chain.contractAddress,
+              topics: [
+                iface.getEvent("ProofRevealed")?.topicHash,
+                ethers.zeroPadValue(cleanAccount, 32),
+              ],
+              fromBlock: 0,
+              toBlock: 'latest',
+            };
 
-          let revealLogs = await provider.getLogs(revealFilter).catch(async () => {
-            const fallbackFromBlock = Math.max(0, currentBlock - 1999);
-            return await provider.getLogs({ ...revealFilter, fromBlock: fallbackFromBlock }).catch(() => []);
-          });
+            let revealLogs = await provider.getLogs(revealFilter).catch(async () => {
+              const fallbackFromBlock = Math.max(0, currentBlock - 1999);
+              return await provider.getLogs({ ...revealFilter, fromBlock: fallbackFromBlock }).catch(() => []);
+            });
 
-          // Sort reveal logs strictly by blockchain block order (blockNumber ascending, then index)
-          revealLogs.sort((a, b) => a.blockNumber - b.blockNumber || a.index - b.index);
+            // Sort reveal logs strictly by blockchain block order (blockNumber ascending, then index)
+            revealLogs.sort((a, b) => a.blockNumber - b.blockNumber || a.index - b.index);
 
-          for (const log of revealLogs) {
-            try {
-              const parsed = iface.parseLog(log);
-              if (parsed) {
-                const origCommit = parsed.args.originalCommitmentHash.toLowerCase();
-                const origTx = parsed.args.originalTransactionHash.toLowerCase();
-                const authorAddr = parsed.args.author.toLowerCase();
+            for (const log of revealLogs) {
+              try {
+                const parsed = iface.parseLog(log);
+                if (parsed) {
+                  const origCommit = parsed.args.originalCommitmentHash.toLowerCase();
+                  const origTx = parsed.args.originalTransactionHash.toLowerCase();
+                  const authorAddr = parsed.args.author.toLowerCase();
 
-                // Composite matching key: commitment + origTx + author
-                const compositeKey = `${origCommit}:${origTx}:${authorAddr}`;
+                  // Composite matching key: commitment + origTx + author
+                  const compositeKey = `${origCommit}:${origTx}:${authorAddr}`;
 
-                // Store earliest reveal log in blockchain block order
-                if (!revealedCommitments.has(compositeKey)) {
-                  revealedCommitments.set(compositeKey, {
-                    revealTxHash: log.transactionHash,
-                    revealBlockNumber: log.blockNumber,
-                    revealTimestamp: new Date(Number(parsed.args.timestamp) * 1000).toLocaleDateString(),
-                    content: parsed.args.content,
-                    secret: parsed.args.secret,
-                  });
+                  // Store earliest reveal log in blockchain block order
+                  if (!revealedCommitments.has(compositeKey)) {
+                    revealedCommitments.set(compositeKey, {
+                      revealTxHash: log.transactionHash,
+                      revealBlockNumber: log.blockNumber,
+                      revealTimestamp: new Date(Number(parsed.args.timestamp) * 1000).toLocaleDateString(),
+                      content: parsed.args.content,
+                      secret: parsed.args.secret,
+                    });
+                  }
                 }
+              } catch (e) {}
+            }
+
+            // 3. Fetch Private Proofs across all historical contracts
+            for (const histContract of approvedContracts) {
+              const privateFilter = {
+                address: histContract.address,
+                topics: [
+                  iface.getEvent("PrivateProof")?.topicHash,
+                  ethers.zeroPadValue(cleanAccount, 32),
+                ],
+                fromBlock: 0,
+                toBlock: 'latest',
+              };
+
+              const privateLogs = await provider.getLogs(privateFilter).catch(async () => {
+                const fallbackFromBlock = Math.max(0, currentBlock - 1999);
+                return await provider.getLogs({ ...privateFilter, fromBlock: fallbackFromBlock }).catch(() => []);
+              });
+
+              for (const log of privateLogs) {
+                try {
+                  const parsed = iface.parseLog(log);
+                  if (parsed) {
+                    const commitHash = parsed.args.commitmentHash;
+                    const compositeKey = `${commitHash.toLowerCase()}:${log.transactionHash.toLowerCase()}:${parsed.args.author.toLowerCase()}`;
+                    const revealData = revealedCommitments.get(compositeKey);
+
+                    records.push({
+                      chain: chain.name,
+                      chainId: chain.id,
+                      mode: 'private',
+                      protocolVersion: histContract.protocolVersion,
+                      contractAddress: histContract.address,
+                      author: parsed.args.author,
+                      contentHash: commitHash,
+                      timestamp: new Date(Number(parsed.args.timestamp) * 1000).toLocaleDateString(),
+                      txHash: log.transactionHash,
+                      blockNumber: log.blockNumber,
+                      isRevealed: !!revealData,
+                      revealData: revealData || null,
+                    });
+                  }
+                } catch (e) {}
               }
-            } catch (e) {}
-          }
-
-          // 3. Fetch Private Proofs
-          const privateFilter = {
-            address: chain.contractAddress,
-            topics: [
-              iface.getEvent("PrivateProof")?.topicHash,
-              ethers.zeroPadValue(cleanAccount, 32),
-            ],
-            fromBlock: 0,
-            toBlock: 'latest',
-          };
-
-          const privateLogs = await provider.getLogs(privateFilter).catch(async () => {
-            const fallbackFromBlock = Math.max(0, currentBlock - 1999);
-            return await provider.getLogs({ ...privateFilter, fromBlock: fallbackFromBlock }).catch(() => []);
-          });
-
-          for (const log of privateLogs) {
-            try {
-              const parsed = iface.parseLog(log);
-              if (parsed) {
-                const commitHash = parsed.args.commitmentHash;
-                const compositeKey = `${commitHash.toLowerCase()}:${log.transactionHash.toLowerCase()}:${parsed.args.author.toLowerCase()}`;
-                const revealData = revealedCommitments.get(compositeKey);
-
-                records.push({
-                  chain: chain.name,
-                  chainId: chain.id,
-                  mode: 'private',
-                  author: parsed.args.author,
-                  contentHash: commitHash,
-                  timestamp: new Date(Number(parsed.args.timestamp) * 1000).toLocaleDateString(),
-                  txHash: log.transactionHash,
-                  blockNumber: log.blockNumber,
-                  isRevealed: !!revealData,
-                  revealData: revealData || null,
-                });
-              }
-            } catch (e) {}
+            }
+          } catch (e) {
+            // Silent fallback per chain
           }
         } catch (e) {
           // Silent fallback per chain

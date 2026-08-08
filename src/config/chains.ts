@@ -17,12 +17,50 @@ export interface ChainConfig {
   deploymentStatus: 'live' | 'testnet' | 'coming_soon';
 }
 
+export interface HistoricalContractConfig {
+  protocolVersion: string;
+  address: string;
+  supportsReveal: boolean;
+}
+
+export const CANONICAL_HISTORICAL_REGISTRY: Record<number, HistoricalContractConfig[]> = {
+  // Base Sepolia (Chain ID 84532)
+  84532: [
+    {
+      protocolVersion: 'INSCRIBESOUL_V1',
+      address: '0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346',
+      supportsReveal: false,
+    },
+    {
+      protocolVersion: 'INSCRIBESOUL_V1_1',
+      address: '0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB',
+      supportsReveal: true,
+    },
+  ],
+};
+
+export function getApprovedContractsForChain(chainId: number): HistoricalContractConfig[] {
+  const contracts = CANONICAL_HISTORICAL_REGISTRY[chainId] || [];
+  const chainKey = Object.keys(SUPPORTED_CHAINS).find((k) => SUPPORTED_CHAINS[k].chainId === chainId);
+  if (chainKey && SUPPORTED_CHAINS[chainKey].contractAddress) {
+    const canonicalAddr = SUPPORTED_CHAINS[chainKey].contractAddress.toLowerCase();
+    if (!contracts.some((c) => c.address.toLowerCase() === canonicalAddr)) {
+      contracts.push({
+        protocolVersion: 'INSCRIBESOUL_V1_1',
+        address: SUPPORTED_CHAINS[chainKey].contractAddress,
+        supportsReveal: true,
+      });
+    }
+  }
+  return contracts;
+}
+
 export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
   baseSepolia: {
     id: 'baseSepolia',
     name: 'Base Sepolia',
     badge: 'Testnet',
-    badgeLabel: 'Live V1 Testnet on Base Sepolia',
+    badgeLabel: 'Live V1.1 Testnet on Base Sepolia',
     chainId: 84532,
     hexChainId: '0x14a34',
     nativeCurrency: { name: 'Sepolia Ether', symbol: 'ETH', decimals: 18 },
@@ -74,6 +112,11 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
     estimatedFeeUsd: '$2.50',
     deploymentStatus: 'coming_soon',
   },
+};
+
+export const EXPECTED_DOMAINS = {
+  PUBLIC_DOMAIN: '0xc00bd1280f0e33060f3d5a20ee35c0547aed0428775278235daa2a2dc87da9a2',
+  PRIVATE_DOMAIN: '0x600839658e1d010994e7bfec2d665e8315b99808c0749aec6e12dcaf62454200',
 };
 
 export const CONTRACT_ABI = [
