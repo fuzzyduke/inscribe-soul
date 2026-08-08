@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "compile": "hardhat compile",
     "test:contracts": "hardhat test",
-    "test": "hardhat test && tsc --noEmit"
+    "test": "hardhat test && tsc --noEmit",
+    "deploy": "npm run build && gh-pages -d dist --cname inscribesoul.valhallala.com"
   },
   "dependencies": {
     "@ethersproject/providers": "^5.7.2",
@@ -27,6 +28,7 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.20",
+    "gh-pages": "^6.3.0",
     "hardhat": "^2.22.8",
     "postcss": "^8.4.41",
     "tailwindcss": "^3.4.9",
