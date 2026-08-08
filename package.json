@@ -1,0 +1,36 @@
+{
+  "name": "inscribesoul",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "compile": "hardhat compile",
+    "test:contracts": "hardhat test",
+    "test": "hardhat test && tsc --noEmit"
+  },
+  "dependencies": {
+    "@ethersproject/providers": "^5.7.2",
+    "clsx": "^2.1.1",
+    "ethers": "^6.13.2",
+    "lucide-react": "^0.427.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwind-merge": "^2.5.2"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@types/node": "^22.2.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.20",
+    "hardhat": "^2.22.8",
+    "postcss": "^8.4.41",
+    "tailwindcss": "^3.4.9",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.0"
+  }
+}
