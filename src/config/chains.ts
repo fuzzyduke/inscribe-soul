@@ -1,3 +1,5 @@
+import { ethers } from 'ethers';
+
 export interface ChainConfig {
   id: string;
   name: string;
@@ -21,6 +23,14 @@ export interface HistoricalContractConfig {
   protocolVersion: string;
   address: string;
   supportsReveal: boolean;
+  deploymentBlock: number;
+}
+
+export interface VerifiedContractPreflight {
+  protocolVersion: string;
+  publicDomain: string;
+  privateDomain: string;
+  protocolFeeWei: bigint;
 }
 
 export const CANONICAL_HISTORICAL_REGISTRY: Record<number, HistoricalContractConfig[]> = {
@@ -30,29 +40,33 @@ export const CANONICAL_HISTORICAL_REGISTRY: Record<number, HistoricalContractCon
       protocolVersion: 'INSCRIBESOUL_V1',
       address: '0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346',
       supportsReveal: false,
+      deploymentBlock: 45206768,
     },
     {
       protocolVersion: 'INSCRIBESOUL_V1_1',
       address: '0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB',
       supportsReveal: true,
+      deploymentBlock: 45207053,
     },
   ],
 };
 
+// Item 7 Fix: Returns a new array copy without mutating CANONICAL_HISTORICAL_REGISTRY
 export function getApprovedContractsForChain(chainId: number): HistoricalContractConfig[] {
-  const contracts = CANONICAL_HISTORICAL_REGISTRY[chainId] || [];
+  const baseList = CANONICAL_HISTORICAL_REGISTRY[chainId] ? [...CANONICAL_HISTORICAL_REGISTRY[chainId]] : [];
   const chainKey = Object.keys(SUPPORTED_CHAINS).find((k) => SUPPORTED_CHAINS[k].chainId === chainId);
   if (chainKey && SUPPORTED_CHAINS[chainKey].contractAddress) {
     const canonicalAddr = SUPPORTED_CHAINS[chainKey].contractAddress.toLowerCase();
-    if (!contracts.some((c) => c.address.toLowerCase() === canonicalAddr)) {
-      contracts.push({
+    if (!baseList.some((c) => c.address.toLowerCase() === canonicalAddr)) {
+      baseList.push({
         protocolVersion: 'INSCRIBESOUL_V1_1',
         address: SUPPORTED_CHAINS[chainKey].contractAddress,
         supportsReveal: true,
+        deploymentBlock: 45207053,
       });
     }
   }
-  return contracts;
+  return baseList;
 }
 
 export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
@@ -132,3 +146,132 @@ export const CONTRACT_ABI = [
   "event PrivateProof(address indexed author, bytes32 indexed commitmentHash, uint256 timestamp)",
   "event ProofRevealed(address indexed author, bytes32 indexed originalCommitmentHash, bytes32 indexed originalTransactionHash, bytes32 secret, string content, uint256 timestamp)"
 ];
+
+// Item 3 & 4 Fix: Shared Canonical Contract Preflight Utility (Fail-Closed)
+export async function verifyCanonicalContract({
+  provider,
+  chain,
+  requiredProtocolVersion = 'INSCRIBESOUL_V1_1',
+}: {
+  provider: ethers.Provider;
+  chain: ChainConfig;
+  requiredProtocolVersion?: string;
+}): Promise<VerifiedContractPreflight> {
+  // A. Chain check
+  const network = await provider.getNetwork().catch(() => {
+    throw new Error(`RPC Network Error: Unable to query active network on ${chain.name}.`);
+  });
+  if (Number(network.chainId) !== chain.chainId) {
+    throw new Error(`Wallet Network Mismatch: Connected to chain ID ${network.chainId}, expected ${chain.chainId} (${chain.name}).`);
+  }
+
+  // B. Bytecode check
+  const code = await provider.getCode(chain.contractAddress).catch(() => {
+    throw new Error(`RPC Read Failure: Unable to fetch contract bytecode for ${chain.contractAddress}.`);
+  });
+  if (code === '0x' || code === '0x0') {
+    throw new Error(`Contract Verification Failed: No contract bytecode exists at ${chain.contractAddress} on ${chain.name}.`);
+  }
+
+  const contractView = new ethers.Contract(chain.contractAddress, CONTRACT_ABI, provider);
+
+  // C. Protocol Version check
+  const protocolVersion = await contractView.PROTOCOL_VERSION().catch(() => {
+    throw new Error(`RPC Read Failure: Unable to read PROTOCOL_VERSION from contract ${chain.contractAddress}.`);
+  });
+  if (protocolVersion !== requiredProtocolVersion) {
+    throw new Error(`Contract Version Mismatch: Contract at ${chain.contractAddress} returned version '${protocolVersion}', expected '${requiredProtocolVersion}'.`);
+  }
+
+  // D & E. Public and Private Domain check
+  const publicDomain = await contractView.PUBLIC_DOMAIN().catch(() => {
+    throw new Error(`RPC Read Failure: Unable to read PUBLIC_DOMAIN from contract ${chain.contractAddress}.`);
+  });
+  const privateDomain = await contractView.PRIVATE_DOMAIN().catch(() => {
+    throw new Error(`RPC Read Failure: Unable to read PRIVATE_DOMAIN from contract ${chain.contractAddress}.`);
+  });
+
+  if (
+    publicDomain.toLowerCase() !== EXPECTED_DOMAINS.PUBLIC_DOMAIN.toLowerCase() ||
+    privateDomain.toLowerCase() !== EXPECTED_DOMAINS.PRIVATE_DOMAIN.toLowerCase()
+  ) {
+    throw new Error(`Contract Domain Verification Failed: Contract at ${chain.contractAddress} does not use expected InscribeSoul cryptographic domains.`);
+  }
+
+  // F. Protocol Fee check (Fail-Closed)
+  let protocolFeeWei: bigint;
+  try {
+    protocolFeeWei = await contractView.protocolFee();
+  } catch (err) {
+    throw new Error(`Unable to determine the current InscribeSoul protocol fee on ${chain.name}. Please check your network connection and retry.`);
+  }
+
+  return {
+    protocolVersion,
+    publicDomain,
+    privateDomain,
+    protocolFeeWei,
+  };
+}
+
+// Item 8, 10, 11 & 12 Fix: Reusable Chunked Event Log Retrieval Helper
+export async function getLogsChunked({
+  provider,
+  address,
+  topics,
+  fromBlock,
+  toBlock,
+  chunkSize = 1800,
+}: {
+  provider: ethers.Provider;
+  address: string;
+  topics: (string | string[] | null)[];
+  fromBlock: number;
+  toBlock: number | 'latest';
+  chunkSize?: number;
+}): Promise<ethers.Log[]> {
+  const currentLatest = typeof toBlock === 'number' ? toBlock : await provider.getBlockNumber();
+  const start = Math.max(0, fromBlock);
+  let logs: ethers.Log[] = [];
+
+  for (let currentFrom = start; currentFrom <= currentLatest; currentFrom += chunkSize) {
+    const currentTo = Math.min(currentLatest, currentFrom + chunkSize - 1);
+    const filter = {
+      address,
+      topics,
+      fromBlock: currentFrom,
+      toBlock: currentTo,
+    };
+
+    let chunkLogs: ethers.Log[] | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        chunkLogs = await provider.getLogs(filter);
+        break;
+      } catch (err) {
+        if (attempt === 2) {
+          throw new Error(`RPC Query Failed: Unable to scan block range ${currentFrom}-${currentTo} on ${address}.`);
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+
+    if (chunkLogs) {
+      logs.push(...chunkLogs);
+    }
+  }
+
+  // Preserve strict blockchain ordering and deduplicate logs
+  logs.sort((a, b) => a.blockNumber - b.blockNumber || a.index - b.index);
+  const seenTxIndex = new Set<string>();
+  const deduplicatedLogs: ethers.Log[] = [];
+  for (const log of logs) {
+    const key = `${log.transactionHash}:${log.index}`;
+    if (!seenTxIndex.has(key)) {
+      seenTxIndex.add(key);
+      deduplicatedLogs.push(log);
+    }
+  }
+
+  return deduplicatedLogs;
+}

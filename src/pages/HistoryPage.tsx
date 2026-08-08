@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { SUPPORTED_CHAINS, CONTRACT_ABI, getApprovedContractsForChain } from '../config/chains';
+import { SUPPORTED_CHAINS, CONTRACT_ABI, getApprovedContractsForChain, getLogsChunked } from '../config/chains';
 import { truncateHash } from '../utils/hashing';
 import { History, ShieldCheck, Eye, ExternalLink, RefreshCw, Unlock, CheckCircle2 } from 'lucide-react';
 import { ethers } from 'ethers';
@@ -42,20 +42,16 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
             const approvedContracts = getApprovedContractsForChain(chain.chainId);
 
             for (const histContract of approvedContracts) {
-              // 1. Fetch Public Inscriptions
-              const publicFilter = {
+              // 1. Fetch Public Inscriptions using chunked helper starting from deploymentBlock
+              const publicLogs = await getLogsChunked({
+                provider,
                 address: histContract.address,
                 topics: [
                   iface.getEvent("PublicInscription")?.topicHash,
                   ethers.zeroPadValue(cleanAccount, 32),
                 ],
-                fromBlock: 0,
+                fromBlock: histContract.deploymentBlock,
                 toBlock: 'latest',
-              };
-
-              const publicLogs = await provider.getLogs(publicFilter).catch(async () => {
-                const fallbackFromBlock = Math.max(0, currentBlock - 1999);
-                return await provider.getLogs({ ...publicFilter, fromBlock: fallbackFromBlock }).catch(() => []);
               });
 
               for (const log of publicLogs) {
@@ -80,25 +76,20 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
               }
             }
 
-            // 2. Fetch ProofRevealed Events & Index by Composite Key (commitmentHash + origTxHash + author + origContract)
+            // 2. Fetch ProofRevealed Events & Index by Composite Key (commitmentHash + origTxHash + author)
             const revealedCommitments = new Map<string, any>();
-            const revealFilter = {
-              address: chain.contractAddress,
+            const v1_1Contract = approvedContracts.find((c) => c.supportsReveal) || approvedContracts[0];
+
+            let revealLogs = await getLogsChunked({
+              provider,
+              address: v1_1Contract.address,
               topics: [
                 iface.getEvent("ProofRevealed")?.topicHash,
                 ethers.zeroPadValue(cleanAccount, 32),
               ],
-              fromBlock: 0,
+              fromBlock: v1_1Contract.deploymentBlock,
               toBlock: 'latest',
-            };
-
-            let revealLogs = await provider.getLogs(revealFilter).catch(async () => {
-              const fallbackFromBlock = Math.max(0, currentBlock - 1999);
-              return await provider.getLogs({ ...revealFilter, fromBlock: fallbackFromBlock }).catch(() => []);
             });
-
-            // Sort reveal logs strictly by blockchain block order (blockNumber ascending, then index)
-            revealLogs.sort((a, b) => a.blockNumber - b.blockNumber || a.index - b.index);
 
             for (const log of revealLogs) {
               try {
@@ -125,21 +116,17 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
               } catch (e) {}
             }
 
-            // 3. Fetch Private Proofs across all historical contracts
+            // 3. Fetch Private Proofs across all historical contracts using chunked helper
             for (const histContract of approvedContracts) {
-              const privateFilter = {
+              const privateLogs = await getLogsChunked({
+                provider,
                 address: histContract.address,
                 topics: [
                   iface.getEvent("PrivateProof")?.topicHash,
                   ethers.zeroPadValue(cleanAccount, 32),
                 ],
-                fromBlock: 0,
+                fromBlock: histContract.deploymentBlock,
                 toBlock: 'latest',
-              };
-
-              const privateLogs = await provider.getLogs(privateFilter).catch(async () => {
-                const fallbackFromBlock = Math.max(0, currentBlock - 1999);
-                return await provider.getLogs({ ...privateFilter, fromBlock: fallbackFromBlock }).catch(() => []);
               });
 
               for (const log of privateLogs) {
@@ -169,11 +156,9 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
               }
             }
           } catch (e) {
-            // Silent fallback per chain
+            console.error(`Error querying chain ${chain.name}:`, e);
           }
-        } catch (e) {
-          // Silent fallback per chain
-        }
+        } catch (e) {}
       }
 
       setInscriptions(records);

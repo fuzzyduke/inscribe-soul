@@ -4,7 +4,38 @@
 
 ---
 
-## 1. Domain Constants
+## 1. Official Deployment Matrix & Historical Registry
+
+| Contract Version | Network | Contract Address | Deployment Block | Reveal Support |
+| :--- | :--- | :--- | :--- | :--- |
+| `INSCRIBESOUL_V1` | Base Sepolia (`84532`) | `0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346` | `#45206768` | False |
+| `INSCRIBESOUL_V1_1` | Base Sepolia (`84532`) | `0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB` | `#45207053` | True |
+
+---
+
+## 2. Shared Canonical Preflight & Fee Source of Truth
+
+Every transaction preview and signature request for new write operations (Public Inscription, Private Proof, Reveal Proof) performs a unified canonical preflight (`verifyCanonicalContract`):
+
+1. **Network Chain Switch**: Forces wallet network switch to target chain ID before querying contract.
+2. **Bytecode Verification**: Ensures smart contract bytecode exists at `contractAddress`.
+3. **Protocol Version Match**: Validates `PROTOCOL_VERSION()` equals `INSCRIBESOUL_V1_1`.
+4. **Domain Constants Match**: Verifies `PUBLIC_DOMAIN` and `PRIVATE_DOMAIN` match expected constants exactly.
+5. **Fail-Closed Protocol Fee Read**: Reads `protocolFee()` live from RPC. Fails closed with an explicit network error if fee cannot be determined; never falls back to 0 ETH.
+
+---
+
+## 3. Chunked Historical Event Retrieval (`getLogsChunked`)
+
+InscribeSoul queries EVM event logs using safe, bounded block ranges (`chunkSize = 1800`) starting from the contract's registered `deploymentBlock`:
+
+- **Historical Log Discovery**: Queries `PublicInscription`, `PrivateProof`, and `ProofRevealed` events chunk by chunk.
+- **Fail-Closed RPC Behavior**: Surfaces RPC errors cleanly with retry capability instead of silently returning empty history.
+- **Deduplication & Order**: Deduplicates by `txHash + index` and sorts strictly by block number and log index ascending.
+
+---
+
+## 4. Domain Constants
 
 ```solidity
 bytes32 public constant PUBLIC_DOMAIN = keccak256(bytes("INSCRIBESOUL_PUBLIC_V1"));
@@ -16,7 +47,7 @@ bytes32 public constant PRIVATE_DOMAIN = keccak256(bytes("INSCRIBESOUL_PRIVATE_V
 
 ---
 
-## 2. Cryptographic Hashing Specifications
+## 5. Cryptographic Hashing Specifications
 
 ### Public Inscription Proof Hash
 
@@ -28,7 +59,7 @@ $$\text{commitmentHash} = \text{keccak256}(\text{abi.encode}(\text{PRIVATE\_DOMA
 
 ---
 
-## 3. Private Proof Package & Portable Blob Specification
+## 6. Private Proof Package & Portable Blob Specification
 
 InscribeSoul uses a single canonical `PrivateProofPackage` schema that serializes into two portable recovery representations:
 
@@ -62,7 +93,7 @@ InscribeSoul uses a single canonical `PrivateProofPackage` schema that serialize
 
 ---
 
-## 4. Optional Local Private Labels
+## 7. Optional Local Private Labels
 
 - **Purpose**: Helps users distinguish sealed inscriptions in browser UI.
 - **Privacy Boundary**: `label` is stored **ONLY** locally in browser storage or inside the user's exported `.json` proof / Portable Blob.
@@ -70,7 +101,7 @@ InscribeSoul uses a single canonical `PrivateProofPackage` schema that serialize
 
 ---
 
-## 5. Official Test Vectors
+## 8. Official Test Vectors
 
 Common Parameters across all test vectors:
 - **Author Wallet**: `0x4B6254BCdFf3D98845393f8594B1C5E6Ba6Dc75C`

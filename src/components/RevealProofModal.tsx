@@ -5,6 +5,7 @@ import {
   CONTRACT_ABI,
   EXPECTED_DOMAINS,
   getApprovedContractsForChain,
+  verifyCanonicalContract,
 } from '../config/chains';
 import {
   computePrivateCommitmentHash,
@@ -282,13 +283,13 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
       }
 
       const receiptToAddr = (receipt.to || '').toLowerCase();
-      const isApprovedContract = approvedHistoricalContracts.some((c) => c.address.toLowerCase() === receiptToAddr);
+      const approvedConfig = approvedHistoricalContracts.find((c) => c.address.toLowerCase() === receiptToAddr);
 
-      if (!isApprovedContract) {
+      if (!approvedConfig) {
         throw new Error(`PROVENANCE FAILURE: Original transaction was sent to ${receipt.to}, which is not an approved historical InscribeSoul contract.`);
       }
 
-      // Item 2 Preflight: Verify contract bytecode and PROTOCOL_VERSION on target historical contract (fail-closed)
+      // Item 6 Fix: Require actual PROTOCOL_VERSION() === registry.protocolVersion for that exact address
       const code = await provider.getCode(receipt.to!).catch(() => {
         throw new Error(`Contract Read Error: Unable to verify contract bytecode at ${receipt.to}.`);
       });
@@ -301,8 +302,8 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
         throw new Error(`Contract Read Error: Unable to read PROTOCOL_VERSION from contract at ${receipt.to}.`);
       });
 
-      if (!histProtocolVersion.startsWith('INSCRIBESOUL_V1')) {
-        throw new Error(`Contract Version Mismatch: Contract at ${receipt.to} returned unexpected version '${histProtocolVersion}'.`);
+      if (histProtocolVersion !== approvedConfig.protocolVersion) {
+        throw new Error(`Historical Contract Version Mismatch: Registry expects ${approvedConfig.protocolVersion} for ${receipt.to}, but contract returned '${histProtocolVersion}'.`);
       }
 
       const iface = new ethers.Interface(CONTRACT_ABI);
@@ -390,45 +391,12 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
 
       const provider = new ethers.BrowserProvider(window.ethereum);
       
-      // 2. Preflight Bytecode & Protocol Version Check (Fail-Closed)
-      const code = await provider.getCode(chain.contractAddress).catch(() => {
-        throw new Error(`RPC Read Failure: Unable to fetch bytecode for contract ${chain.contractAddress}.`);
+      // Item 3, 4 & 5 Fix: Shared fail-closed canonical contract preflight
+      const preflight = await verifyCanonicalContract({
+        provider,
+        chain,
+        requiredProtocolVersion: 'INSCRIBESOUL_V1_1',
       });
-      if (code === '0x' || code === '0x0') {
-        throw new Error(`Contract Execution Error: No bytecode exists at ${chain.contractAddress} on ${chain.name}.`);
-      }
-
-      const contractView = new ethers.Contract(chain.contractAddress, CONTRACT_ABI, provider);
-      const protocolVersion = await contractView.PROTOCOL_VERSION().catch(() => {
-        throw new Error(`RPC Read Failure: Unable to read PROTOCOL_VERSION from contract ${chain.contractAddress}.`);
-      });
-
-      if (protocolVersion !== 'INSCRIBESOUL_V1_1') {
-        throw new Error(`Contract Version Mismatch: Contract at ${chain.contractAddress} is running version '${protocolVersion}'. Version INSCRIBESOUL_V1_1 is required for on-chain reveals.`);
-      }
-
-      // Item 6 Fix: Strict Domain Constants Preflight Verification (Fail-Closed)
-      const publicDomain = await contractView.PUBLIC_DOMAIN().catch(() => {
-        throw new Error(`RPC Read Failure: Unable to read PUBLIC_DOMAIN from contract ${chain.contractAddress}.`);
-      });
-      const privateDomain = await contractView.PRIVATE_DOMAIN().catch(() => {
-        throw new Error(`RPC Read Failure: Unable to read PRIVATE_DOMAIN from contract ${chain.contractAddress}.`);
-      });
-
-      if (
-        publicDomain.toLowerCase() !== EXPECTED_DOMAINS.PUBLIC_DOMAIN.toLowerCase() ||
-        privateDomain.toLowerCase() !== EXPECTED_DOMAINS.PRIVATE_DOMAIN.toLowerCase()
-      ) {
-        throw new Error('Contract Domain Verification Failed: The selected contract does not use the expected InscribeSoul cryptographic domains.');
-      }
-
-      // Item 9 Fix: Fail-Closed Protocol Fee Read (No assumptions or fallback to 0n)
-      let requiredFee: bigint;
-      try {
-        requiredFee = await contractView.protocolFee();
-      } catch (feeErr) {
-        throw new Error('Unable to determine the current InscribeSoul protocol fee. Please retry when network connection is available.');
-      }
 
       const signer = await provider.getSigner();
       const contract = new ethers.Contract(chain.contractAddress, CONTRACT_ABI, signer);
@@ -438,7 +406,7 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
         verificationDetails.origTxHash,
         verificationDetails.secret,
         verificationDetails.content,
-        { value: requiredFee }
+        { value: preflight.protocolFeeWei }
       );
 
       const receipt = await tx.wait(1);

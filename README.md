@@ -9,12 +9,23 @@
 
 ## Deployment Status Matrix
 
-| Network | Status | Canonical Contract Address | Selectable in UI |
-| :--- | :--- | :--- | :--- |
-| **Base Sepolia (Testnet)** | **LIVE V1.1 TESTNET** | [`0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB`](https://sepolia.basescan.org/address/0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB) | **Yes** |
-| **Base Mainnet** | NOT DEPLOYED | `N/A (Coming Soon)` | No |
-| **Ethereum Sepolia** | NOT DEPLOYED | `N/A (Coming Soon)` | No |
-| **Ethereum Mainnet** | NOT DEPLOYED | `N/A (Coming Soon)` | No |
+| Network | Status | Canonical Contract Address | Verified Deployment Block | Selectable in UI |
+| :--- | :--- | :--- | :--- | :--- |
+| **Base Sepolia (Testnet)** | **LIVE V1.1 TESTNET** | [`0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB`](https://sepolia.basescan.org/address/0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB) | `#45207053` | **Yes** |
+| **Base Mainnet** | NOT DEPLOYED | `N/A (Coming Soon)` | `N/A` | No |
+| **Ethereum Sepolia** | NOT DEPLOYED | `N/A (Coming Soon)` | `N/A` | No |
+| **Ethereum Mainnet** | NOT DEPLOYED | `N/A (Coming Soon)` | `N/A` | No |
+
+---
+
+## Historical Contract Registry
+
+For provenance, historical queries, and manual recovery, InscribeSoul accepts original Private Proof commitments from registered canonical contracts:
+
+- **Historical V1 Contract**: [`0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346`](https://sepolia.basescan.org/address/0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346) — `INSCRIBESOUL_V1` (Deployment Block: `#45206768`)
+- **Current Canonical V1.1 Contract**: [`0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB`](https://sepolia.basescan.org/address/0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB) — `INSCRIBESOUL_V1_1` (Deployment Block: `#45207053`)
+
+> **Note**: All new writes (Public Inscription, Private Proof, and Reveal Proof) execute strictly against the active canonical V1.1 contract.
 
 ---
 
@@ -30,16 +41,18 @@ $$\text{Write} \longrightarrow \text{Choose Privacy Mode} \longrightarrow \text{
 
 ## Architectural Principles
 
-1. **On-Chain Permanence via EVM Logs**:
+1. **On-Chain Permanence via Chunked EVM Event Logs**:
    - Inscriptions are emitted as indexed EVM smart contract event logs (`PublicInscription`, `PrivateProof`, and `ProofRevealed`).
-   - No central database or off-chain API indexer is required to query or verify proof history.
+   - Querying uses a reusable chunked log scanner (`getLogsChunked`) starting from verified deployment blocks (`deploymentBlock`).
+   - Deduplicates and preserves strict blockchain ordering without relying on off-chain databases or centralized indexers.
 
 2. **Client-Side Privacy Guarantee**:
    - For **Private Proofs**, raw text is never sent to any server, database, or blockchain node.
    - Commitment hashes are computed purely inside the user's browser using standard Web Crypto API (`window.crypto`).
 
-3. **Multi-EVM Support Ready**:
-   - Designed with chain-agnostic interface abstractions (`SUPPORTED_CHAINS`) allowing additional EVM chains (Ethereum Mainnet, Base Mainnet, Sepolia) to be enabled without modifying core application logic.
+3. **Shared Fail-Closed Contract Preflight**:
+   - Every write transaction (Public, Private, Reveal) and preview executes a unified canonical preflight check (`verifyCanonicalContract`).
+   - Enforces wallet chain switching first, validates bytecode presence, verifies exact `PROTOCOL_VERSION()`, matches cryptographic domain constants (`PUBLIC_DOMAIN`, `PRIVATE_DOMAIN`), and reads `protocolFee()` fail-closed (never falling back to 0 ETH on RPC failure).
 
 ---
 
@@ -110,31 +123,13 @@ To ensure users never need to record or manage raw technical hashes:
    Format: `INSCRIBESOUL-PROOF-V1:<base64url-encoded-utf8-json>`
    Copy-paste safe, versioned string that can be backed up in password managers or encrypted notes.
 3. **Manual Recovery**:
-   Given **Exact Original Text** + **Secret Salt Key**, InscribeSoul automatically queries blockchain RPC logs to discover the original commitment transaction hash, block height, and timestamp.
+   Given **Exact Original Text** + **Secret Salt Key**, InscribeSoul automatically queries blockchain RPC logs to discover the original commitment transaction hash, block height, and timestamp across historical deployment contracts.
 
 ---
 
 ## Exact UTF-8 Content Semantics
 
 InscribeSoul V1.1 hashes exact UTF-8 content. Any character, whitespace, trailing space, line-ending (CRLF vs LF), or capitalization change creates a completely different proof hash.
-
----
-
-## Smart Contract Specification
-
-The canonical Solidity implementation is maintained strictly in [`contracts/InscribeSoul.sol`](contracts/InscribeSoul.sol).
-
-### Historical Canonical Contracts Accepted for Provenance:
-- `INSCRIBESOUL_V1` (Base Sepolia): `0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346`
-- `INSCRIBESOUL_V1_1` (Base Sepolia Canonical): `0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB`
-
-### Overview:
-- **Solidity Version**: `^0.8.24`
-- **Protocol Version**: `INSCRIBESOUL_V1_1`
-- **Event Signatures**:
-  - `PublicInscription(address indexed author, bytes32 indexed proofHash, string content, uint256 timestamp)`
-  - `PrivateProof(address indexed author, bytes32 indexed commitmentHash, uint256 timestamp)`
-  - `ProofRevealed(address indexed author, bytes32 indexed originalCommitmentHash, bytes32 indexed originalTransactionHash, bytes32 secret, string content, uint256 timestamp)`
 
 ---
 
@@ -147,7 +142,7 @@ npm install
 # Run Vite dev server
 npm run dev
 
-# Run Hardhat test suite (39 passing tests)
+# Run Hardhat test suite (43 passing tests)
 npx hardhat test
 
 # Build production bundle

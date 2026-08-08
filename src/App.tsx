@@ -10,7 +10,7 @@ import { DeployContractModal } from './components/DeployContractModal';
 import { VerifyPage } from './pages/VerifyPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { InscriptionDetailPage } from './pages/InscriptionDetailPage';
-import { SUPPORTED_CHAINS, CONTRACT_ABI } from './config/chains';
+import { SUPPORTED_CHAINS, CONTRACT_ABI, verifyCanonicalContract } from './config/chains';
 import {
   computePrivateCommitmentHash,
   computePublicProofHash,
@@ -122,7 +122,7 @@ export function App() {
   }
 
   const handleOpenPreview = async () => {
-    if (!contentText.trim()) return;
+    if (!contentText) return;
 
     if (!account) {
       await connectWallet();
@@ -137,19 +137,38 @@ export function App() {
     setErrorMessage(null);
 
     try {
-      if (window.ethereum) {
-        const provider = new ethers.BrowserProvider(window.ethereum);
-        const contract = new ethers.Contract(currentChain.contractAddress, CONTRACT_ABI, provider);
-        const fee = await contract.protocolFee().catch(() => 0n);
-        setProtocolFeeWei(fee);
-        setProtocolFeeEth(ethers.formatEther(fee));
+      if (!window.ethereum) {
+        throw new Error('Wallet Required: No EVM wallet detected in browser.');
       }
-    } catch (e) {
-      setProtocolFeeWei(0n);
-      setProtocolFeeEth('0.00');
-    }
 
-    setIsPreviewOpen(true);
+      // Item 2 Fix: Switch wallet to selected chain FIRST before preflight and fee read
+      try {
+        await window.ethereum.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: currentChain.hexChainId }],
+        });
+      } catch (switchError: any) {
+        throw new Error(
+          `Unable to switch wallet to ${currentChain.name}. Please switch network manually in your wallet and try again.`
+        );
+      }
+
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      
+      // Item 3, 4 & 5 Fix: Shared fail-closed canonical contract preflight
+      const preflight = await verifyCanonicalContract({
+        provider,
+        chain: currentChain,
+        requiredProtocolVersion: 'INSCRIBESOUL_V1_1',
+      });
+
+      setProtocolFeeWei(preflight.protocolFeeWei);
+      setProtocolFeeEth(ethers.formatEther(preflight.protocolFeeWei));
+      setIsPreviewOpen(true);
+    } catch (err: any) {
+      console.error('Preview Preflight Error:', err);
+      setErrorMessage(err.message || 'Unable to verify canonical contract or determine protocol fee.');
+    }
   };
 
   const handleConfirmInscription = async () => {
@@ -179,38 +198,25 @@ export function App() {
       }
 
       const provider = new ethers.BrowserProvider(window.ethereum);
-      const network = await provider.getNetwork();
-      if (Number(network.chainId) !== currentChain.chainId) {
-        throw new Error(
-          `Wallet network mismatch. Active chain is ${network.chainId}, expected ${currentChain.chainId} (${currentChain.name}).`
-        );
-      }
-
-      const code = await provider.getCode(currentChain.contractAddress);
-      if (code === '0x' || code === '0x0') {
-        throw new Error(
-          `Contract Verification Failed: No contract bytecode exists at ${currentChain.contractAddress} on ${currentChain.name}.`
-        );
-      }
+      
+      // Shared canonical preflight check before transaction signature
+      const preflight = await verifyCanonicalContract({
+        provider,
+        chain: currentChain,
+        requiredProtocolVersion: 'INSCRIBESOUL_V1_1',
+      });
 
       const signer = await provider.getSigner();
       const contract = new ethers.Contract(currentChain.contractAddress, CONTRACT_ABI, signer);
-
-      let requiredFeeWei: bigint;
-      try {
-        requiredFeeWei = await contract.protocolFee();
-      } catch (feeErr) {
-        throw new Error(`Unable to determine the current InscribeSoul protocol fee on ${currentChain.name}. Please retry when network connection is available.`);
-      }
 
       setTxStep('awaiting_wallet');
       setStatusMessage('Awaiting wallet signature approval...');
 
       let tx;
       if (mode === 'public') {
-        tx = await contract.inscribePublic(contentText, { value: requiredFeeWei });
+        tx = await contract.inscribePublic(contentText, { value: preflight.protocolFeeWei });
       } else {
-        tx = await contract.inscribeProof(currentProofHash, { value: requiredFeeWei });
+        tx = await contract.inscribeProof(currentProofHash, { value: preflight.protocolFeeWei });
       }
 
       setTxHash(tx.hash);

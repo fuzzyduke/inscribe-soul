@@ -260,5 +260,17 @@ describe("InscribeSoul Reveal Proof Contract & Recovery Test Suite (Items 1-30)"
         feeContract.connect(user).inscribeProof(commitment, { value: ethers.parseEther("0.01") })
       ).to.emit(feeContract, "PrivateProof");
     });
+
+    it("4. Shared contract preflight succeeds for deployed INSCRIBESOUL_V1_1 contract", async function () {
+      const version = await contract.PROTOCOL_VERSION();
+      const pubDomain = await contract.PUBLIC_DOMAIN();
+      const privDomain = await contract.PRIVATE_DOMAIN();
+      const fee = await contract.protocolFee();
+
+      expect(version).to.equal("INSCRIBESOUL_V1_1");
+      expect(pubDomain).to.equal(PUBLIC_DOMAIN);
+      expect(privDomain).to.equal(PRIVATE_DOMAIN);
+      expect(fee).to.equal(0n);
+    });
   });
 });
