@@ -21,7 +21,7 @@ Base Mainnet: Not yet deployed
 
 ## Documentation Index
 
-- 📜 [PROTOCOL_SPEC.md](PROTOCOL_SPEC.md) — Complete technical specification, hashing algorithms, and contract ABI.
+- 📜 [PROTOCOL_SPEC.md](PROTOCOL_SPEC.md) — Complete technical specification, custom errors, hashing algorithms, and contract ABI.
 - 🚀 [DEPLOYMENTS.md](DEPLOYMENTS.md) — Canonical contract deployment registry, block heights, and network statuses.
 - 🔒 [SECURITY.md](SECURITY.md) — Threat model, privacy boundaries, sealed vs revealed states, and admin powers.
 - 🧪 [TEST_VECTORS.md](TEST_VECTORS.md) — Independent test vectors with full ABI-encoded byte payloads.
@@ -37,7 +37,7 @@ Base Mainnet: Not yet deployed
 
 It allows users to write text (manifestos, inventions, predictions, code, prior art) and anchor it permanently to an EVM blockchain in one of two modes:
 1. **Public Inscription**: The content is stored publicly on-chain.
-2. **Private Proof**: The content is hashed locally with a random 32-byte secret salt. Only the 32-byte commitment hash is recorded on-chain while the text remains private. Later, the original author can choose to **Reveal** the proof publicly on-chain.
+2. **Private Proof**: The content is hashed locally with a random 32-byte secret salt (`window.crypto.getRandomValues`). Only the 32-byte commitment hash is recorded on-chain while the text remains private. Later, the original author can choose to **Reveal** the proof publicly on-chain.
 
 ---
 
@@ -69,7 +69,7 @@ It allows users to write text (manifestos, inventions, predictions, code, prior 
 ```
 
 ### Mode 3: Reveal Proof (V1.1 Capability)
-Publicly unseals a previously recorded Private Proof on-chain. The smart contract recomputes the salted commitment live on-chain. Upon success, it emits a `ProofRevealed` event containing the unsealed text and secret, while proving the timestamp of the original private commitment.
+Publicly unseals a previously recorded Private Proof on-chain. The smart contract recomputes the salted commitment live on-chain. Upon success, it emits a `ProofRevealed` event containing the unsealed text and secret, proving that the author wallet committed to that text on or before the original block timestamp.
 
 > **Privacy Notice**: Revealing a Private Proof permanently publishes the text and secret to the public blockchain.
 
@@ -90,8 +90,12 @@ An actual execution lifecycle recorded on Base Sepolia:
 - **Author Wallet**: `0x4B6254BCdFf3D98845393f8594B1C5E6Ba6Dc75C`
 - **Original Private Proof Transaction**: [`0x4684bdcc7d76200b96951158df4e3c482acf3a2d6f5cba3a557048ff42f937c1`](https://sepolia.basescan.org/tx/0x4684bdcc7d76200b96951158df4e3c482acf3a2d6f5cba3a557048ff42f937c1) (Block `#45207153`)
 - **Original Commitment Hash**: `0x89ee78787ed0066a9bb82c0015cc362d0249ca50b827a6a3c10be41b79edcf15`
-- **Reveal Transaction Hash**: [`0xd557818322d26018cfb77b66be4d78746fb9126b001b3377a7f515b71fcd0141`](https://sepolia.basescan.org/tx/0xd557818322d26018cfb77b66be4d78746fb9126b001b3377a7f515b71fcd0141`) (Block `#45207192`)
+- **Reveal Transaction Hash**: [`0xd557818322d26018cfb77b66be4d78746fb9126b001b3377a7f515b71fcd0141`](https://sepolia.basescan.org/tx/0xd557818322d26018cfb77b66be4d78746fb9126b001b3377a7f515b71fcd0141) (Block `#45207192`)
 - **Revealed Plaintext**: `"hidden 6"`
+
+### Provenance Verification Results:
+- **On-Chain Contract Verification**: `revealProof()` verified live on-chain that `msg.sender` + `secret` + `"hidden 6"` reproduced `0x89ee78...edcf15`.
+- **Client Provenance Verification**: Client verified via RPC log inspection that original transaction `0x4684bd...37c1` emitted `PrivateProof` on contract `0xdD7317...9AcB` at block `#45207153` (`origBlockNumber < revealBlockNumber`).
 
 ---
 
@@ -106,7 +110,7 @@ Users can recover and reveal Private Proofs using three redundant input methods:
 
 ---
 
-## Local Development & Running Tests
+## Local Development & Running Validation
 
 ```bash
 # Install dependencies
@@ -115,7 +119,7 @@ npm install
 # Start local dev server
 npm run dev
 
-# Run Hardhat test suite (44 passing tests)
+# Run full validation suite (Hardhat tests + TypeScript check)
 npm test
 
 # Build production distribution

@@ -27,7 +27,7 @@
 - **Deployment Block**: `#45207053`
 - **Deployment Block Timestamp**: `2026-08-08T09:46:34.000Z` (Unix: `1786182394`)
 - **Deployer / Owner Wallet**: `0x4B6254BCdFf3D98845393f8594B1C5E6Ba6Dc75C`
-- **Initial Protocol Fee**: `0 ETH` (`0 wei`)
+- **Initial / Current Observed Protocol Fee**: `0 ETH` (`0 wei`)
 - **Maximum Fee Ceiling (`MAX_PROTOCOL_FEE`)**: `0.1 ETH` (`100000000000000000 wei`)
 - **Capabilities**: Public Inscriptions, Private Proofs, On-Chain Proof Reveals (`revealProof`)
 - **Proxy Architecture**: Non-proxy, immutable, non-upgradeable contract bytecode
@@ -39,8 +39,12 @@
 - **Protocol Version**: `INSCRIBESOUL_V1`
 - **Network**: Base Sepolia (`chainId: 84532`)
 - **Contract Address**: [`0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346`](https://sepolia.basescan.org/address/0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346)
-- **Deployment Block**: `#45206768` (Verified deployment block range)
+- **Deployment Transaction**: `Not independently verified` (Contract created prior to V1.1 deployment tracking)
+- **Deployment Block**: `#45206768` (Earliest recorded block range)
+- **Deployment Timestamp**: `2026-08-08T09:37:00.000Z` (Estimated block time range)
 - **Deployer / Owner Wallet**: `0x4B6254BCdFf3D98845393f8594B1C5E6Ba6Dc75C`
+- **Initial / Current Observed Protocol Fee**: `0 ETH` (`0 wei`)
+- **Maximum Fee Ceiling (`MAX_PROTOCOL_FEE`)**: `0.1 ETH` (`100000000000000000 wei`)
 - **Capabilities**: Historical Public Inscriptions & Private Proofs (Read-only historical provenance source; does not support `revealProof`)
 - **Proxy Architecture**: Non-proxy, immutable, non-upgradeable contract bytecode
 

@@ -8,7 +8,7 @@
 
 InscribeSoul is an intentionally minimalist, non-custodial Web3 protocol that creates permanent, cryptographically verifiable blockchain timestamps.
 
-The protocol provides cryptographic evidence that a specific EVM wallet address publicly inscribed specific content, or committed to specific hidden content, no later than a particular blockchain block timestamp.
+The protocol provides cryptographic evidence that a specific EVM wallet address publicly inscribed specific content, or committed to specific hidden content, **no later than a particular blockchain block timestamp**.
 
 ---
 
@@ -48,6 +48,8 @@ InscribeSoul operates strictly on **exact UTF-8 byte sequences**:
 
 ## 5. Cryptographic Hashing Algorithms
 
+Commitment hashing in the application client (`src/utils/hashing.ts`) uses `ethers.AbiCoder` for standard EVM ABI-encoding combined with Keccak-256 (`ethers.keccak256`).
+
 ### Public Inscription Proof Hash
 
 $$\text{proofHash} = \text{keccak256}(\text{abi.encode}(\text{PUBLIC\_DOMAIN}, \text{authorAddress}, \text{content}))$$
@@ -64,100 +66,141 @@ $$\text{commitmentHash} = \text{keccak256}(\text{abi.encode}(\text{PRIVATE\_DOMA
 
 - **`PRIVATE_DOMAIN`**: `bytes32`
 - **`authorAddress`**: `address`
-- **`secret`**: `bytes32` (32 random entropy bytes generated via `window.crypto.getRandomValues`)
+- **`secret`**: `bytes32` (32 random entropy bytes generated via Browser Web Crypto API `window.crypto.getRandomValues`)
 - **`content`**: `string` (exact UTF-8)
 
 ---
 
 ## 6. On-Chain Reveal Algorithm
 
-The Solidity `revealProof()` function unseals a Private Proof on-chain:
+The Solidity `revealProof()` function in [`contracts/InscribeSoul.sol`](contracts/InscribeSoul.sol) unseals a Private Proof on-chain:
+
+```solidity
+bytes32 computedCommitment = keccak256(
+    abi.encode(
+        PRIVATE_DOMAIN,
+        msg.sender,
+        secret,
+        content
+    )
+);
+
+if (computedCommitment != originalCommitmentHash) revert CommitmentMismatch();
+```
 
 1. Recomputes $\text{keccak256}(\text{abi.encode}(\text{PRIVATE\_DOMAIN}, \text{msg.sender}, \text{secret}, \text{content}))$.
-2. Reverts with `CommitmentMismatch()` if recomputed commitment does not equal `originalCommitmentHash`.
+2. Reverts with custom error `CommitmentMismatch()` if the recomputed commitment does not equal `originalCommitmentHash`.
 3. Emits `ProofRevealed(author, originalCommitmentHash, originalTransactionHash, secret, content, timestamp)`.
 
 ---
 
-## 7. Shared Canonical Preflight & Fee Source of Truth
+## 7. Fee Semantics & Payment Rules
 
-Every transaction preview and signature request for new write operations executes a unified canonical preflight check (`verifyCanonicalContract`):
+InscribeSoul smart contracts enforce:
 
-1. **Network Chain Switch**: Forces wallet network switch to target chain ID before querying contract.
-2. **Bytecode Verification**: Ensures smart contract bytecode exists at `contractAddress`.
-3. **Protocol Version Match**: Validates `PROTOCOL_VERSION()` equals `INSCRIBESOUL_V1_1`.
-4. **Domain Constants Match**: Verifies `PUBLIC_DOMAIN` and `PRIVATE_DOMAIN` match expected constants.
-5. **Fail-Closed Protocol Fee Read**: Reads `protocolFee()` live from RPC. Fails closed with an explicit network error if fee cannot be determined; never falls back to 0 ETH.
-
----
-
-## 8. Smart Contract Interface & Events
-
-The canonical Solidity interface is defined in [`contracts/InscribeSoul.sol`](contracts/InscribeSoul.sol):
-
-### View Functions
-- `PROTOCOL_VERSION() external view returns (string)`
-- `PUBLIC_DOMAIN() external view returns (bytes32)`
-- `PRIVATE_DOMAIN() external view returns (bytes32)`
-- `protocolFee() external view returns (uint256)`
-- `MAX_PROTOCOL_FEE() external view returns (uint256)`
-
-### State-Changing Functions
-- `inscribePublic(string calldata content) external payable`
-- `inscribeProof(bytes32 commitmentHash) external payable`
-- `revealProof(bytes32 originalCommitmentHash, bytes32 originalTransactionHash, bytes32 secret, string calldata content) external payable`
-- `setProtocolFee(uint256 newFee) external` (Owner only)
-- `withdrawFees() external` (Owner only)
-
-### Contract Events
-- `event PublicInscription(address indexed author, bytes32 indexed proofHash, string content, uint256 timestamp)`
-- `event PrivateProof(address indexed author, bytes32 indexed commitmentHash, uint256 timestamp)`
-- `event ProofRevealed(address indexed author, bytes32 indexed originalCommitmentHash, bytes32 indexed originalTransactionHash, bytes32 secret, string content, uint256 timestamp)`
-- `event FeeUpdated(uint256 newFee)`
-- `event FeesWithdrawn(address indexed recipient, uint256 amount)`
-
-### Custom Errors
-- `error InsufficientProtocolFee(uint256 provided, uint256 required)`
-- `error CommitmentMismatch()`
-- `error FeeExceedsMaximum(uint256 provided, uint256 maximum)`
-- `error Unauthorized()`
-- `error WithdrawFailed()`
-
----
-
-## 9. Private Proof Package & Portable Blob Specification
-
-InscribeSoul uses a single canonical `PrivateProofPackage` schema that serializes into two portable recovery representations:
-
-### Canonical JSON Schema (`PrivateProofPackage`)
-
-```json
-{
-  "format": "INSCRIBESOUL_PROOF_PACKAGE_V1",
-  "protocol": "INSCRIBESOUL_PRIVATE_V1",
-  "label": "Concentrated Liquidity Lending Idea",
-  "content": "exact original text",
-  "secret": "0x...",
-  "author": "0x...",
-  "commitmentHash": "0x...",
-  "chainId": 84532,
-  "transactionHash": "0x...",
-  "blockNumber": 1234567,
-  "blockTimestamp": 1700000000,
-  "blockTimestampISO": "2026-08-08T00:00:00.000Z",
-  "contractAddress": "0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB"
-}
+```solidity
+if (msg.value < protocolFee) revert InsufficientFee(protocolFee, msg.value);
 ```
 
-### Copyable Portable Proof Blob Specification
-
-- **Prefix**: `INSCRIBESOUL-PROOF-V1:`
-- **Encoding**: UTF-8 JSON $\longrightarrow$ Base64URL (url-safe, copy-paste resilient without line wraps).
-- **Format**: `INSCRIBESOUL-PROOF-V1:<base64url-encoded-utf8-json>`
-- **Security Property**: Base64URL is an encoding format, NOT encryption. Anyone with access to the Portable Proof Blob can read the original text and secret salt.
+- **Execution Condition**: `msg.value >= protocolFee`.
+- **Payment Below Fee**: Transaction reverts with `InsufficientFee(required, provided)`.
+- **Exact Payment**: Transaction succeeds.
+- **Overpayment**: Transaction succeeds, and any excess ETH above `protocolFee` is retained by the contract balance.
+- **Protocol Fee Cap**: `MAX_PROTOCOL_FEE = 0.1 ether` (`100000000000000000 wei`).
+- **Current Observed Fee**: `0 ETH` on Base Sepolia V1.1 deployment (owner-adjustable up to `MAX_PROTOCOL_FEE`).
 
 ---
 
-## 10. Official Reproducible Test Vectors
+## 8. Canonical Timestamp & Block Provenance Semantics
 
-For implementation-independent test vectors with full ABI-encoded byte payloads, consult [`TEST_VECTORS.md`](TEST_VECTORS.md).
+- **Canonical InscribeSoul Timestamp**: Defined strictly as the `block.timestamp` of the L2 blockchain block header containing the event log.
+- **Non-Canonical Reference Data**: Local client clock time (`new Date()`) and `clientCreationTimeISO` package fields are cached reference metadata only. Verifiers should re-fetch canonical block headers directly from RPC.
+- **Proven Timestamp Scope**: A timestamp establishes that the inscription or commitment was included in a block **no later than the containing block timestamp**.
+- **Public vs Private vs Reveal Timestamps**:
+  - **Public Inscription**: Timestamp of the block containing `PublicInscription`.
+  - **Private Proof**: Timestamp of the block containing `PrivateProof`.
+  - **Reveal Proof**: Contains TWO timestamps: (1) original `PrivateProof` block timestamp, and (2) `ProofRevealed` block timestamp (`origBlockNumber < revealBlockNumber`).
+
+---
+
+## 9. Historical Provenance Verification Algorithm
+
+Client verification of a Private Proof and Reveal provenance follows a 15-step deterministic algorithm:
+
+1. Resolve network chain configuration (`chainId`).
+2. Resolve registered historical contracts (`getApprovedContractsForChain`).
+3. Locate original transaction receipt via RPC (`getTransactionReceipt`).
+4. Require receipt exists and status indicates execution success (`status === 1`).
+5. Require `receipt.to` matches an approved historical contract address in `CANONICAL_HISTORICAL_REGISTRY`.
+6. Verify contract bytecode exists at `receipt.to` (`getCode != 0x`).
+7. Query `PROTOCOL_VERSION()` from contract via RPC.
+8. Require `PROTOCOL_VERSION()` strictly matches the exact registered `protocolVersion` for that address.
+9. Parse receipt logs using contract ABI.
+10. Require receipt contains a matching `PrivateProof` event emitted by `receipt.to`.
+11. Require event `author` matches claimed author address.
+12. Require event `commitmentHash` matches claimed/recomputed commitment hash.
+13. Fetch canonical block header (`getBlock(receipt.blockNumber)`).
+14. Record canonical block timestamp (`block.timestamp`).
+15. If evaluating Reveal Proof, verify `origBlockNumber < revealBlockNumber`.
+
+---
+
+## 10. Smart Contract Custom Errors Reference
+
+The complete custom error interface from [`contracts/InscribeSoul.sol`](contracts/InscribeSoul.sol) is specified below:
+
+```solidity
+error InsufficientFee(uint256 required, uint256 provided);
+error InvalidCommitmentHash();
+error InvalidTransactionHash();
+error InvalidSecret();
+error EmptyContent();
+error CommitmentMismatch();
+error FeeExceedsMaximum(uint256 requested, uint256 maximum);
+error Unauthorized();
+error WithdrawFailed();
+```
+
+### Error Conditions:
+- **`InsufficientFee(uint256 required, uint256 provided)`**: Reverts when `msg.value` sent with transaction is less than `protocolFee`.
+- **`InvalidCommitmentHash()`**: Reverts when `commitmentHash` or `originalCommitmentHash` parameter is `bytes32(0)`.
+- **`InvalidTransactionHash()`**: Reverts when `originalTransactionHash` parameter is `bytes32(0)`.
+- **`InvalidSecret()`**: Reverts when `secret` salt parameter is `bytes32(0)`.
+- **`EmptyContent()`**: Reverts when string `content` payload has length `0`.
+- **`CommitmentMismatch()`**: Reverts during `revealProof()` when `keccak256(abi.encode(PRIVATE_DOMAIN, msg.sender, secret, content))` does not equal `originalCommitmentHash`.
+- **`FeeExceedsMaximum(uint256 requested, uint256 maximum)`**: Reverts when `setProtocolFee` attempts to set `protocolFee` above `MAX_PROTOCOL_FEE` (`0.1 ETH`).
+- **`Unauthorized()`**: Reverts when a function protected by `onlyOwner` is called by an account other than `owner`.
+- **`WithdrawFailed()`**: Reverts when low-level ETH transfer fails during `withdrawFees()`.
+
+---
+
+## 11. Private Proof Package Specification
+
+The TypeScript `PrivateProofPackage` schema (`src/utils/hashing.ts`) defines recovery and verification packages:
+
+| Field | Type | Required? | Sensitive? | Hashed in Commitment? | Data Class | Description |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `format` | `string` | Yes | No | No | Protocol Header | Package format identifier (`INSCRIBESOUL_PROOF_PACKAGE_V1`). |
+| `protocol` | `string` | Yes | No | No | Protocol Header | Hashing domain identifier (`INSCRIBESOUL_PRIVATE_V1`). |
+| `content` | `string` | Yes | **YES** | **YES** | Sensitive Input | Raw, exact UTF-8 original content text. |
+| `secret` | `string` | Yes | **YES** | **YES** | Sensitive Input | 32-byte hex secret salt key (`0x...`). |
+| `author` | `string` | Yes | No | **YES** | Author Identity | Checksummed EVM author wallet address (`0x...`). |
+| `commitmentHash` | `string` | Yes | No | **N/A** | Cryptographic Output | 32-byte hex Keccak-256 commitment hash. |
+| `label` | `string` | No | Potentially | **NO** | Local Metadata | Optional user private label for local organization. |
+| `chainId` | `number` | Yes | No | No | Cached Metadata | Target EVM chain ID (`84532` for Base Sepolia). |
+| `transactionHash` | `string` | Optional | No | No | Cached Metadata | Hint hash of Private Proof transaction. |
+| `blockNumber` | `number` | Optional | No | No | Cached Metadata | Hint block height of Private Proof transaction. |
+| `blockTimestamp` | `number` | Optional | No | No | Cached Metadata | Hint Unix timestamp of Private Proof block. |
+| `blockTimestampISO` | `string` | Optional | No | No | Cached Metadata | Hint ISO 8601 string of Private Proof block time. |
+| `contractAddress` | `string` | Optional | No | No | Cached Metadata | Hint contract address of original Private Proof. |
+| `clientCreationTimeISO` | `string` | Optional | No | No | Cached Metadata | Local browser clock time when proof was generated. |
+
+> **Security Note on Cached Metadata**: All imported blockchain metadata fields (`transactionHash`, `blockNumber`, `blockTimestamp`, `contractAddress`) are treated as lookup hints and are independently re-verified against RPC data during provenance verification.
+
+---
+
+## 12. Portable Proof Blob Serialization
+
+- **Format**: `INSCRIBESOUL-PROOF-V1:<base64url-payload>`
+- **Serialization Pipeline**: `PrivateProofPackage` $\longrightarrow$ `JSON.stringify` $\longrightarrow$ UTF-8 Bytes $\longrightarrow$ Base64URL (stripping `=` padding).
+- **Application Format Notice**: The Portable Proof Blob is an application serialization format for copy-paste portability. Hashing commitments depend strictly on `(author, secret, content)`, not JSON string formatting or property ordering.
