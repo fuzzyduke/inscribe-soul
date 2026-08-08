@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { SUPPORTED_CHAINS } from '../config/chains';
+import { SUPPORTED_CHAINS, CONTRACT_ABI } from '../config/chains';
 import { truncateHash } from '../utils/hashing';
-import { ShieldCheck, Eye, ExternalLink, Calendar, Database, Layers, KeyRound } from 'lucide-react';
+import { ShieldCheck, Eye, ExternalLink, Calendar, Database, Layers, KeyRound, CheckCircle2, ArrowRight } from 'lucide-react';
 import { ethers } from 'ethers';
 
 interface InscriptionDetailPageProps {
@@ -25,7 +25,7 @@ export const InscriptionDetailPage: React.FC<InscriptionDetailPageProps> = ({
       setError(null);
 
       try {
-        const chain = SUPPORTED_CHAINS[chainId] || SUPPORTED_CHAINS.base;
+        const chain = SUPPORTED_CHAINS[chainId] || SUPPORTED_CHAINS.baseSepolia;
         const provider = new ethers.JsonRpcProvider(chain.rpcUrl);
         const receipt = await provider.getTransactionReceipt(txHash);
 
@@ -33,20 +33,19 @@ export const InscriptionDetailPage: React.FC<InscriptionDetailPageProps> = ({
           throw new Error('Transaction receipt not found on chain RPC.');
         }
 
-        const iface = new ethers.Interface([
-          "event PublicInscription(address indexed author, bytes32 indexed proofHash, string content, uint256 timestamp)",
-          "event PrivateProof(address indexed author, bytes32 indexed commitmentHash, uint256 timestamp)"
-        ]);
+        const iface = new ethers.Interface(CONTRACT_ABI);
 
         let matchedEvent: any = null;
-        let mode: 'public' | 'private' = 'private';
+        let mode: 'public' | 'private' | 'reveal' = 'private';
 
         for (const log of receipt.logs) {
           try {
             const parsed = iface.parseLog(log);
             if (parsed) {
               matchedEvent = parsed;
-              mode = parsed.name === 'PublicInscription' ? 'public' : 'private';
+              if (parsed.name === 'PublicInscription') mode = 'public';
+              else if (parsed.name === 'ProofRevealed') mode = 'reveal';
+              else mode = 'private';
               break;
             }
           } catch (e) {}
@@ -58,8 +57,38 @@ export const InscriptionDetailPage: React.FC<InscriptionDetailPageProps> = ({
           : 'Timestamp recorded on-chain';
 
         const proofHash = matchedEvent
-          ? matchedEvent.args.proofHash || matchedEvent.args.commitmentHash
+          ? matchedEvent.args.proofHash || matchedEvent.args.commitmentHash || matchedEvent.args.originalCommitmentHash
           : 'Unknown';
+
+        // Check if Private Proof has a corresponding Reveal event log on-chain
+        let revealLogData: any = null;
+        if (mode === 'private') {
+          try {
+            const revealFilter = {
+              address: chain.contractAddress,
+              topics: [
+                iface.getEvent("ProofRevealed")?.topicHash,
+                ethers.zeroPadValue(receipt.from, 32),
+                proofHash,
+              ],
+              fromBlock: 0,
+              toBlock: 'latest',
+            };
+            const revealLogs = await provider.getLogs(revealFilter);
+            if (revealLogs.length > 0) {
+              const revLog = revealLogs[0];
+              const revParsed = iface.parseLog(revLog);
+              const revBlock = await provider.getBlock(revLog.blockNumber);
+              revealLogData = {
+                revealTxHash: revLog.transactionHash,
+                revealBlockNumber: revLog.blockNumber,
+                revealTimestamp: revBlock ? new Date(revBlock.timestamp * 1000).toLocaleString() : 'Timestamp verified',
+                content: revParsed?.args.content,
+                secret: revParsed?.args.secret,
+              };
+            }
+          } catch (e) {}
+        }
 
         setData({
           chain: chain.name,
@@ -72,7 +101,10 @@ export const InscriptionDetailPage: React.FC<InscriptionDetailPageProps> = ({
           author: matchedEvent ? matchedEvent.args.author : receipt.from,
           proofHash,
           content: matchedEvent && matchedEvent.args.content ? matchedEvent.args.content : undefined,
-          protocolVersion: 'INSCRIBESOUL_V1',
+          secret: matchedEvent && matchedEvent.args.secret ? matchedEvent.args.secret : undefined,
+          origTxHash: matchedEvent && matchedEvent.args.originalTransactionHash ? matchedEvent.args.originalTransactionHash : undefined,
+          revealLogData,
+          protocolVersion: 'INSCRIBESOUL_V1_1',
         });
       } catch (err: any) {
         setError(err.message || 'Failed to reconstruct inscription from blockchain');
@@ -144,12 +176,41 @@ export const InscriptionDetailPage: React.FC<InscriptionDetailPageProps> = ({
           </div>
 
           <span className="px-3 py-1.5 rounded-full bg-amber-950/60 border border-amber-800 text-amber-300 font-mono text-xs uppercase tracking-wider font-bold shrink-0">
-            {data.mode === 'private' ? 'Private Proof' : 'Public Inscription'}
+            {data.mode === 'private' ? (data.revealLogData ? 'Private Proof (Revealed ✓)' : 'Private Proof (Sealed)') : data.mode === 'reveal' ? 'Proof Revealed' : 'Public Inscription'}
           </span>
         </div>
 
-        {/* Inscription Content (If Public) */}
-        {data.mode === 'public' && data.content && (
+        {/* Connected Pair Provenance Banner for Revealed Proofs */}
+        {data.revealLogData && (
+          <div className="p-5 bg-emerald-950/20 border border-emerald-800/60 rounded-xl font-mono text-xs space-y-3">
+            <div className="flex items-center gap-2 text-emerald-400 font-bold uppercase text-xs">
+              <CheckCircle2 className="w-4 h-4" />
+              Revealed Provenance Pair Discovered
+            </div>
+            <p className="text-stone-300 text-[11px] font-sans">
+              This original private commitment has been publicly revealed in a subsequent blockchain transaction.
+            </p>
+            <div className="p-4 bg-stone-950/90 rounded-lg border border-stone-800 space-y-2 text-[11px]">
+              <span className="text-amber-400 font-bold uppercase block">Publicly Revealed Content:</span>
+              <p className="text-stone-100 font-mono text-xs whitespace-pre-wrap">{data.revealLogData.content}</p>
+              <div className="pt-2 border-t border-stone-800 flex justify-between items-center text-stone-400">
+                <span>Reveal Transaction:</span>
+                <a
+                  href={`${data.explorer}/tx/${data.revealLogData.revealTxHash}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-amber-400 hover:underline flex items-center gap-1"
+                >
+                  {truncateHash(data.revealLogData.revealTxHash, 8, 6)}
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Inscription Content (If Public or Reveal) */}
+        {data.content && (
           <div className="space-y-2">
             <label className="block text-xs font-mono uppercase tracking-widest text-stone-400">
               On-Chain Plaintext Content
@@ -186,9 +247,24 @@ export const InscriptionDetailPage: React.FC<InscriptionDetailPageProps> = ({
         {/* Hashes & Transactions */}
         <div className="bg-stone-950/90 p-5 rounded-xl border border-stone-800 space-y-3 font-mono text-xs">
           <div className="flex justify-between items-start">
-            <span className="text-stone-400 shrink-0">Proof Hash:</span>
+            <span className="text-stone-400 shrink-0">Proof / Commitment Hash:</span>
             <span className="text-amber-400 font-bold break-all text-right ml-4">{data.proofHash}</span>
           </div>
+
+          {data.origTxHash && (
+            <div className="flex justify-between items-start pt-2 border-t border-stone-800">
+              <span className="text-stone-400 shrink-0">Original Commitment Tx:</span>
+              <a
+                href={`${data.explorer}/tx/${data.origTxHash}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-amber-400 hover:underline flex items-center gap-1 text-right ml-4"
+              >
+                {truncateHash(data.origTxHash, 8, 6)}
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            </div>
+          )}
 
           <div className="flex justify-between items-start pt-2 border-t border-stone-800">
             <span className="text-stone-400 shrink-0">Transaction Hash:</span>
