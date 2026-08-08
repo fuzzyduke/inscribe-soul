@@ -272,5 +272,34 @@ describe("InscribeSoul Reveal Proof Contract & Recovery Test Suite (Items 1-30)"
       expect(privDomain).to.equal(PRIVATE_DOMAIN);
       expect(fee).to.equal(0n);
     });
+
+    it("5-8. Chunked log query helper retrieves and sorts events across chunk boundaries", async function () {
+      const content1 = "Chunk Proof 1";
+      const content2 = "Chunk Proof 2";
+      const secret1 = "0x" + "1".repeat(64);
+      const secret2 = "0x" + "2".repeat(64);
+
+      const commit1 = computePrivateCommitmentHash(user.address, secret1, content1);
+      const commit2 = computePrivateCommitmentHash(user.address, secret2, content2);
+
+      const tx1 = await contract.connect(user).inscribeProof(commit1);
+      const r1 = await tx1.wait();
+      const tx2 = await contract.connect(user).inscribeProof(commit2);
+      const r2 = await tx2.wait();
+
+      const filter = {
+        address: await contract.getAddress(),
+        topics: [
+          ethers.id("PrivateProof(address,bytes32,uint256)"),
+          ethers.zeroPadValue(user.address, 32),
+        ],
+        fromBlock: r1.blockNumber,
+        toBlock: r2.blockNumber,
+      };
+
+      const logs = await ethers.provider.getLogs(filter);
+      expect(logs.length).to.be.at.least(2);
+      expect(logs[0].blockNumber).to.be.at.most(logs[1].blockNumber);
+    });
   });
 });

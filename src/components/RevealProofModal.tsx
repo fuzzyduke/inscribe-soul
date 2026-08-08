@@ -6,6 +6,7 @@ import {
   EXPECTED_DOMAINS,
   getApprovedContractsForChain,
   verifyCanonicalContract,
+  getLogsChunked,
 } from '../config/chains';
 import {
   computePrivateCommitmentHash,
@@ -146,25 +147,22 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
       let matchedLog: any = null;
       let matchedContractInfo: any = null;
 
-      // Query across all approved historical contract addresses
+      // Item 3, 4, 8 & 9 Fix: Deterministic earliest matching lookup using getLogsChunked starting from deploymentBlock
       for (const histContract of approvedHistoricalContracts) {
-        const filter = {
+        const logs = await getLogsChunked({
+          provider,
           address: histContract.address,
           topics: [
             iface.getEvent("PrivateProof")?.topicHash,
             ethers.zeroPadValue(cleanAuthor, 32),
             computedHash,
           ],
-          fromBlock: 0,
+          fromBlock: histContract.deploymentBlock,
           toBlock: 'latest',
-        };
-
-        const logs = await provider.getLogs(filter).catch(async () => {
-          const fallbackFromBlock = Math.max(0, currentBlock - 1999);
-          return await provider.getLogs({ ...filter, fromBlock: fallbackFromBlock }).catch(() => []);
         });
 
         if (logs.length > 0) {
+          // getLogsChunked returns logs sorted strictly by blockNumber and logIndex ascending; choose earliest
           matchedLog = logs[0];
           matchedContractInfo = histContract;
           break;
@@ -172,7 +170,7 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
       }
 
       if (!matchedLog) {
-        throw new Error('No matching Private Proof was found on-chain across approved historical contracts for these recovery details and connected wallet.');
+        throw new Error('No matching Private Proof was found for these recovery details and connected wallet.');
       }
 
       const block = await provider.getBlock(matchedLog.blockNumber);
@@ -211,7 +209,7 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
     }
   };
 
-  // Item 1, 2 & 10 Fix: Strict Historical Contract Registry Validation & Fail-Closed Preflight
+  // Item 1, 2 & 6 Fix: Auto-discover missing original transaction using getLogsChunked starting from deploymentBlock
   const validateProofPackage = async (data: Partial<PrivateProofPackage> & Record<string, any>) => {
     setIsValidating(true);
     setErrorMsg(null);
@@ -246,27 +244,26 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
       const approvedHistoricalContracts = getApprovedContractsForChain(chain.chainId);
 
       let origTxHash = data.transactionHash;
-      let matchedHistContract: any = null;
 
-      // Auto-discover tx across approved historical contracts if missing
+      // Item 6 Fix: Auto-discover tx across approved historical contracts if missing using chunked helper
       if (!origTxHash) {
         const iface = new ethers.Interface(CONTRACT_ABI);
         for (const histContract of approvedHistoricalContracts) {
-          const filter = {
+          const logs = await getLogsChunked({
+            provider,
             address: histContract.address,
             topics: [
               iface.getEvent("PrivateProof")?.topicHash,
               ethers.zeroPadValue(cleanAuthor, 32),
               computedHash,
             ],
-            fromBlock: 0,
+            fromBlock: histContract.deploymentBlock,
             toBlock: 'latest',
-          };
+          });
 
-          const logs = await provider.getLogs(filter).catch(() => []);
           if (logs.length > 0) {
+            // Select earliest matching log in blockchain order
             origTxHash = logs[0].transactionHash;
-            matchedHistContract = histContract;
             break;
           }
         }

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { SUPPORTED_CHAINS, CONTRACT_ABI } from '../config/chains';
+import { SUPPORTED_CHAINS, CONTRACT_ABI, getApprovedContractsForChain, getLogsChunked } from '../config/chains';
 import { truncateHash } from '../utils/hashing';
 import { ShieldCheck, Eye, ExternalLink, Calendar, Database, Layers, KeyRound, CheckCircle2, ArrowRight } from 'lucide-react';
 import { ethers } from 'ethers';
@@ -64,17 +64,18 @@ export const InscriptionDetailPage: React.FC<InscriptionDetailPageProps> = ({
         let revealLogData: any = null;
         if (mode === 'private') {
           try {
-            const revealFilter = {
-              address: chain.contractAddress,
+            const v1_1Contract = (getApprovedContractsForChain(chain.chainId) || []).find((c) => c.supportsReveal) || { address: chain.contractAddress, deploymentBlock: 45207053 };
+            const revealLogs = await getLogsChunked({
+              provider,
+              address: v1_1Contract.address,
               topics: [
                 iface.getEvent("ProofRevealed")?.topicHash,
                 ethers.zeroPadValue(receipt.from, 32),
                 proofHash,
               ],
-              fromBlock: 0,
+              fromBlock: v1_1Contract.deploymentBlock,
               toBlock: 'latest',
-            };
-            const revealLogs = await provider.getLogs(revealFilter);
+            });
             if (revealLogs.length > 0) {
               const revLog = revealLogs[0];
               const revParsed = iface.parseLog(revLog);

@@ -4,7 +4,7 @@ import {
   computePublicProofHash,
   truncateHash,
 } from '../utils/hashing';
-import { SUPPORTED_CHAINS, CONTRACT_ABI } from '../config/chains';
+import { SUPPORTED_CHAINS, CONTRACT_ABI, getApprovedContractsForChain, getLogsChunked } from '../config/chains';
 import { CheckCircle2, XCircle, Search, ShieldAlert, KeyRound, AlertTriangle, WifiOff, FileCheck, Eye, ExternalLink } from 'lucide-react';
 import { ethers } from 'ethers';
 
@@ -288,24 +288,26 @@ export const VerifyPage: React.FC = () => {
           ? iface.getEvent("PrivateProof")?.topicHash 
           : iface.getEvent("PublicInscription")?.topicHash;
 
-        const filter = {
-          address: chain.contractAddress,
-          topics: [
-            targetTopic,
-            ethers.zeroPadValue(cleanAuthor, 32),
-            computedHash,
-          ],
-          fromBlock: 0,
-          toBlock: 'latest',
-        };
+        const approvedHistoricalContracts = getApprovedContractsForChain(chain.chainId);
 
         let logs: any[] = [];
         try {
-          logs = await provider.getLogs(filter).catch(async () => {
-            const currentBlock = await provider.getBlockNumber().catch(() => 0);
-            const fallbackFromBlock = Math.max(0, currentBlock - 1999);
-            return await provider.getLogs({ ...filter, fromBlock: fallbackFromBlock }).catch(() => []);
-          });
+          for (const histContract of approvedHistoricalContracts) {
+            const histLogs = await getLogsChunked({
+              provider,
+              address: histContract.address,
+              topics: [
+                targetTopic,
+                ethers.zeroPadValue(cleanAuthor, 32),
+                computedHash,
+              ],
+              fromBlock: histContract.deploymentBlock,
+              toBlock: 'latest',
+            });
+            if (histLogs.length > 0) {
+              logs.push(...histLogs);
+            }
+          }
         } catch (rpcErr: any) {
           setResult({
             status: 'rpcError',
