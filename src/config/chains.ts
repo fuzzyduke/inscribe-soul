@@ -28,7 +28,7 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
     nativeCurrency: { name: 'Sepolia Ether', symbol: 'ETH', decimals: 18 },
     rpcUrl: 'https://sepolia.base.org',
     blockExplorerUrl: 'https://sepolia.basescan.org',
-    contractAddress: '0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346',
+    contractAddress: '0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB',
     estimatedFeeUsd: '$0.00',
     deploymentStatus: 'testnet',
   },
