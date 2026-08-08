@@ -1,16 +1,20 @@
 import React from 'react';
-import { ShieldCheck, Eye, AlertTriangle, Info, KeyRound, Save } from 'lucide-react';
+import { ShieldCheck, Eye, AlertTriangle, KeyRound, Save, Tag } from 'lucide-react';
 
 interface PreservationModeSelectorProps {
   mode: 'private' | 'public';
   setMode: (mode: 'private' | 'public') => void;
   secret?: string;
+  label?: string;
+  setLabel?: (label: string) => void;
 }
 
 export const PreservationModeSelector: React.FC<PreservationModeSelectorProps> = ({
   mode,
   setMode,
   secret,
+  label = '',
+  setLabel,
 }) => {
   return (
     <div className="space-y-4">
@@ -86,46 +90,37 @@ export const PreservationModeSelector: React.FC<PreservationModeSelectorProps> =
         </div>
       </div>
 
+      {/* OPTIONAL PRIVATE LABEL INPUT */}
+      {mode === 'private' && setLabel && (
+        <div className="p-4 bg-stone-900/60 border border-stone-800 rounded-xl space-y-2 font-mono text-xs">
+          <label className="text-stone-300 font-bold uppercase tracking-wider flex items-center justify-between">
+            <span className="flex items-center gap-1.5">
+              <Tag className="w-3.5 h-3.5 text-amber-400" />
+              Private Label (Optional)
+            </span>
+            <span className="text-[10px] text-stone-500 font-sans font-normal">Stays local — never inscribed on-chain</span>
+          </label>
+          <input
+            type="text"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="e.g. Concentrated Liquidity Lending Idea"
+            className="w-full bg-stone-950 border border-stone-800 focus:border-amber-700/80 rounded-lg px-3 py-2 text-stone-200 placeholder:text-stone-600 focus:outline-none"
+          />
+        </div>
+      )}
+
       {/* DETAILED NOTICES BASED ON MODE */}
       {mode === 'private' ? (
         <div className="p-5 rounded-xl bg-amber-950/30 border border-amber-800/50 space-y-4 font-sans text-xs text-amber-200/90 shadow-md">
           <div className="flex items-center gap-2 pb-2 border-b border-amber-800/40 text-amber-300 font-mono text-xs uppercase tracking-wider font-bold">
             <ShieldCheck className="w-4 h-4 text-amber-400" />
-            Private Proof Requirements (2-Step Safeguard)
+            Private Proof Safeguard Overview
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Step 1 */}
-            <div className="bg-stone-950/70 p-4 rounded-lg border border-amber-900/40 space-y-2">
-              <div className="flex items-center gap-2 text-stone-200 font-mono text-xs font-bold">
-                <Save className="w-4 h-4 text-amber-400 shrink-0" />
-                1. Save Your Original Text
-              </div>
-              <p className="text-stone-300 text-[11px] leading-relaxed">
-                InscribeSoul never stores your original text on any server or database. Keep your exact original text saved somewhere safe.
-              </p>
-            </div>
-
-            {/* Step 2 */}
-            <div className="bg-stone-950/70 p-4 rounded-lg border border-amber-900/40 space-y-2">
-              <div className="flex items-center gap-2 text-stone-200 font-mono text-xs font-bold">
-                <KeyRound className="w-4 h-4 text-amber-400 shrink-0" />
-                2. Keep Your Secret Salt Key
-              </div>
-              <p className="text-stone-300 text-[11px] leading-relaxed">
-                This 32-byte secret salt prevents dictionary guessing attacks. Save this key or download your <strong>Proof File (.json)</strong> after inscribing.
-              </p>
-              {secret && (
-                <div className="pt-2 border-t border-stone-800 font-mono text-[10px] text-amber-300 break-all bg-stone-900 p-2 rounded">
-                  {secret}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="text-[11px] font-mono text-amber-400/90 pt-1">
-            <strong>CRITICAL:</strong> Without BOTH your exact original text and this secret salt key, no one (including InscribeSoul) can verify your private proof in the future.
-          </div>
+          <p className="text-stone-300 text-[11px] leading-relaxed font-sans">
+            Your content itself is not on-chain. Only its cryptographic commitment hash is inscribed. Save your <strong>Proof File (.json)</strong> or copy your <strong>Portable Proof Blob</strong> after inscribing.
+          </p>
         </div>
       ) : (
         <div className="p-4 rounded-xl bg-red-950/30 border border-red-800/40 flex items-start gap-3 text-xs text-red-200/90 font-sans">

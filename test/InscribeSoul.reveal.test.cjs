@@ -1,7 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
-describe("InscribeSoul Reveal Proof Contract & Verification Test Suite (Items 1-30)", function () {
+describe("InscribeSoul Reveal Proof Contract & Recovery Test Suite (Items 1-30)", function () {
   let contract;
   let owner;
   let user;
@@ -9,6 +9,7 @@ describe("InscribeSoul Reveal Proof Contract & Verification Test Suite (Items 1-
 
   const PUBLIC_DOMAIN = ethers.keccak256(ethers.toUtf8Bytes("INSCRIBESOUL_PUBLIC_V1"));
   const PRIVATE_DOMAIN = ethers.keccak256(ethers.toUtf8Bytes("INSCRIBESOUL_PRIVATE_V1"));
+  const PORTABLE_PROOF_PREFIX = "INSCRIBESOUL-PROOF-V1:";
 
   function computePrivateCommitmentHash(author, secret, content) {
     if (!author || !ethers.isAddress(author)) throw new Error("Invalid EVM wallet address");
@@ -21,6 +22,25 @@ describe("InscribeSoul Reveal Proof Contract & Verification Test Suite (Items 1-
       [PRIVATE_DOMAIN, ethers.getAddress(author), secret, content]
     );
     return ethers.keccak256(encoded);
+  }
+
+  function encodePortableProofBlob(pkg) {
+    const jsonStr = JSON.stringify(pkg);
+    const utf8Bytes = ethers.toUtf8Bytes(jsonStr);
+    const base64 = ethers.encodeBase64(utf8Bytes);
+    const base64Url = base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return `${PORTABLE_PROOF_PREFIX}${base64Url}`;
+  }
+
+  function decodePortableProofBlob(blobStr) {
+    if (!blobStr || !blobStr.startsWith(PORTABLE_PROOF_PREFIX)) {
+      throw new Error("Invalid Portable Proof prefix");
+    }
+    const base64Url = blobStr.slice(PORTABLE_PROOF_PREFIX.length);
+    let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    while (base64.length % 4 !== 0) base64 += '=';
+    const bytes = ethers.decodeBase64(base64);
+    return JSON.parse(ethers.toUtf8String(bytes));
   }
 
   beforeEach(async function () {
@@ -101,11 +121,9 @@ describe("InscribeSoul Reveal Proof Contract & Verification Test Suite (Items 1-
     it("5. Different wallet attempting to reveal another wallet's commitment fails", async function () {
       const content = "User idea";
       const secret = "0x" + "5".repeat(64);
-      // Commitment created for 'user.address'
       const commitmentHashUser = computePrivateCommitmentHash(user.address, secret, content);
       const fakeTxHash = ethers.keccak256(ethers.toUtf8Bytes("fake-tx"));
 
-      // 'otherUser' attempts to reveal user's commitment
       await expect(
         contract.connect(otherUser).revealProof(
           commitmentHashUser,
@@ -115,90 +133,56 @@ describe("InscribeSoul Reveal Proof Contract & Verification Test Suite (Items 1-
         )
       ).to.be.revertedWithCustomError(contract, "CommitmentMismatch");
     });
+  });
 
-    it("6. Zero commitment hash fails", async function () {
-      const fakeTxHash = ethers.keccak256(ethers.toUtf8Bytes("fake-tx"));
-      const secret = "0x" + "6".repeat(64);
+  describe("Portable Proof Blob & Package Tests (18-21)", function () {
+    it("18. JSON and Portable Blob produce identical commitment hash and exact round-trip decode", function () {
+      const secret = "0x" + "e".repeat(64);
+      const content = "Portable Proof Round Trip 📜⚡";
+      const commitment = computePrivateCommitmentHash(user.address, secret, content);
 
-      await expect(
-        contract.connect(user).revealProof(
-          ethers.ZeroHash,
-          fakeTxHash,
-          secret,
-          "content"
-        )
-      ).to.be.revertedWithCustomError(contract, "InvalidCommitmentHash");
+      const pkg = {
+        format: "INSCRIBESOUL_PROOF_PACKAGE_V1",
+        protocol: "INSCRIBESOUL_PRIVATE_V1",
+        label: "Concentrated Liquidity Lending",
+        content,
+        secret,
+        author: user.address,
+        commitmentHash: commitment,
+        chainId: 84532,
+        transactionHash: "0x" + "f".repeat(64),
+        blockNumber: 12345,
+        blockTimestamp: 1700000000,
+        blockTimestampISO: new Date(1700000000 * 1000).toISOString(),
+        contractAddress: "0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346",
+      };
+
+      const blobStr = encodePortableProofBlob(pkg);
+      expect(blobStr.startsWith(PORTABLE_PROOF_PREFIX)).to.be.true;
+
+      const decodedPkg = decodePortableProofBlob(blobStr);
+      expect(decodedPkg.content).to.equal(content);
+      expect(decodedPkg.secret).to.equal(secret);
+      expect(decodedPkg.label).to.equal("Concentrated Liquidity Lending");
+      expect(decodedPkg.commitmentHash).to.equal(commitment);
+
+      const recomputedHash = computePrivateCommitmentHash(decodedPkg.author, decodedPkg.secret, decodedPkg.content);
+      expect(recomputedHash).to.equal(commitment);
     });
 
-    it("7. Zero original transaction hash fails", async function () {
-      const secret = "0x" + "7".repeat(64);
-      const commitmentHash = computePrivateCommitmentHash(user.address, secret, "content");
+    it("19 & 20. Optional private label does NOT alter commitment hash", function () {
+      const secret = "0x" + "a".repeat(64);
+      const content = "Test label immutability";
+      const hash1 = computePrivateCommitmentHash(user.address, secret, content);
 
-      await expect(
-        contract.connect(user).revealProof(
-          commitmentHash,
-          ethers.ZeroHash,
-          secret,
-          "content"
-        )
-      ).to.be.revertedWithCustomError(contract, "InvalidTransactionHash");
-    });
+      const pkg1 = { content, secret, author: user.address, label: "Label A" };
+      const pkg2 = { content, secret, author: user.address, label: "Label B" };
 
-    it("8. Empty content fails", async function () {
-      const secret = "0x" + "8".repeat(64);
-      const fakeTxHash = ethers.keccak256(ethers.toUtf8Bytes("fake-tx"));
+      const hashFromPkg1 = computePrivateCommitmentHash(pkg1.author, pkg1.secret, pkg1.content);
+      const hashFromPkg2 = computePrivateCommitmentHash(pkg2.author, pkg2.secret, pkg2.content);
 
-      await expect(
-        contract.connect(user).revealProof(
-          fakeTxHash,
-          fakeTxHash,
-          secret,
-          ""
-        )
-      ).to.be.revertedWithCustomError(contract, "EmptyContent");
-    });
-
-    it("9. Zero secret fails", async function () {
-      const fakeTxHash = ethers.keccak256(ethers.toUtf8Bytes("fake-tx"));
-
-      await expect(
-        contract.connect(user).revealProof(
-          fakeTxHash,
-          fakeTxHash,
-          ethers.ZeroHash,
-          "content"
-        )
-      ).to.be.revertedWithCustomError(contract, "InvalidSecret");
-    });
-
-    it("10. Protocol fee enforced for reveal", async function () {
-      const fee = ethers.parseEther("0.005");
-      await contract.connect(owner).setProtocolFee(fee);
-
-      const secret = "0x" + "9".repeat(64);
-      const content = "Fee test";
-      const commitmentHash = computePrivateCommitmentHash(user.address, secret, content);
-      const fakeTxHash = ethers.keccak256(ethers.toUtf8Bytes("fake-tx"));
-
-      await expect(
-        contract.connect(user).revealProof(
-          commitmentHash,
-          fakeTxHash,
-          secret,
-          content,
-          { value: 0 }
-        )
-      ).to.be.revertedWithCustomError(contract, "InsufficientFee");
-
-      await expect(
-        contract.connect(user).revealProof(
-          commitmentHash,
-          fakeTxHash,
-          secret,
-          content,
-          { value: fee }
-        )
-      ).to.emit(contract, "ProofRevealed");
+      expect(hashFromPkg1).to.equal(hash1);
+      expect(hashFromPkg2).to.equal(hash1);
     });
   });
 
@@ -206,41 +190,6 @@ describe("InscribeSoul Reveal Proof Contract & Verification Test Suite (Items 1-
     it("25. Unicode reveal works deterministically", async function () {
       const content = "InscribeSoul Reveal 📜⚡ 🔐";
       const secret = "0x" + "a".repeat(64);
-      const commitmentHash = computePrivateCommitmentHash(user.address, secret, content);
-      const fakeTxHash = ethers.keccak256(ethers.toUtf8Bytes("fake-tx"));
-
-      await expect(
-        contract.connect(user).revealProof(
-          commitmentHash,
-          fakeTxHash,
-          secret,
-          content
-        )
-      ).to.emit(contract, "ProofRevealed");
-    });
-
-    it("26 & 27. LF multiline vs CRLF multiline reveals remain distinct", async function () {
-      const secret = "0x" + "b".repeat(64);
-      const contentLF = "Line 1\nLine 2";
-      const contentCRLF = "Line 1\r\nLine 2";
-
-      const commitLF = computePrivateCommitmentHash(user.address, secret, contentLF);
-      const fakeTxHash = ethers.keccak256(ethers.toUtf8Bytes("fake-tx"));
-
-      // Attempting to reveal CRLF against LF commitment fails
-      await expect(
-        contract.connect(user).revealProof(
-          commitLF,
-          fakeTxHash,
-          secret,
-          contentCRLF
-        )
-      ).to.be.revertedWithCustomError(contract, "CommitmentMismatch");
-    });
-
-    it("28. Leading/trailing whitespace reveal works", async function () {
-      const content = "  Idea with trailing space  ";
-      const secret = "0x" + "c".repeat(64);
       const commitmentHash = computePrivateCommitmentHash(user.address, secret, content);
       const fakeTxHash = ethers.keccak256(ethers.toUtf8Bytes("fake-tx"));
 

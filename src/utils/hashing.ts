@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 
-export const PROTOCOL_VERSION = 'INSCRIBESOUL_V1';
+export const PROTOCOL_VERSION = 'INSCRIBESOUL_V1_1';
 
 export const PUBLIC_DOMAIN = ethers.keccak256(ethers.toUtf8Bytes('INSCRIBESOUL_PUBLIC_V1'));
 export const PRIVATE_DOMAIN = ethers.keccak256(ethers.toUtf8Bytes('INSCRIBESOUL_PRIVATE_V1'));
@@ -86,8 +86,13 @@ export function truncateHash(hash: string, startChars = 8, endChars = 6): string
   return `${hash.slice(0, startChars)}...${hash.slice(-endChars)}`;
 }
 
-export interface InscribeSoulPrivateProofJSON {
+/**
+ * Single Canonical Private Proof Package Schema V1
+ */
+export interface PrivateProofPackage {
+  format: 'INSCRIBESOUL_PROOF_PACKAGE_V1';
   protocol: 'INSCRIBESOUL_PRIVATE_V1';
+  label?: string;
   content: string;
   secret: string;
   author: string;
@@ -101,10 +106,67 @@ export interface InscribeSoulPrivateProofJSON {
   clientCreationTimeISO?: string;
 }
 
+export const PORTABLE_PROOF_PREFIX = 'INSCRIBESOUL-PROOF-V1:';
+
+/**
+ * Encodes a PrivateProofPackage into a copyable text Portable Proof Blob
+ * Format: INSCRIBESOUL-PROOF-V1:<base64url-encoded-utf8-json>
+ */
+export function encodePortableProofBlob(pkg: PrivateProofPackage): string {
+  const jsonStr = JSON.stringify(pkg);
+  const utf8Bytes = ethers.toUtf8Bytes(jsonStr);
+  const base64 = ethers.encodeBase64(utf8Bytes);
+  // Convert standard base64 to base64url (url-safe, copy-paste resilient)
+  const base64Url = base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return `${PORTABLE_PROOF_PREFIX}${base64Url}`;
+}
+
+/**
+ * Decodes a Portable Proof Blob string back into a PrivateProofPackage.
+ * Throws explicit errors if format, prefix, base64, or JSON schema is invalid.
+ */
+export function decodePortableProofBlob(blobStr: string): PrivateProofPackage {
+  if (!blobStr || typeof blobStr !== 'string') {
+    throw new Error('Invalid Portable Proof: Input string is empty.');
+  }
+  const clean = blobStr.trim();
+  if (!clean.startsWith(PORTABLE_PROOF_PREFIX)) {
+    throw new Error(`Invalid Portable Proof prefix: Expected '${PORTABLE_PROOF_PREFIX}'`);
+  }
+  
+  const base64Url = clean.slice(PORTABLE_PROOF_PREFIX.length);
+  // Restore standard base64 from base64url
+  let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+  while (base64.length % 4 !== 0) {
+    base64 += '=';
+  }
+
+  let jsonStr: string;
+  try {
+    const bytes = ethers.decodeBase64(base64);
+    jsonStr = ethers.toUtf8String(bytes);
+  } catch (err: any) {
+    throw new Error('Invalid Portable Proof: Base64 decoding failed.');
+  }
+
+  let pkg: any;
+  try {
+    pkg = JSON.parse(jsonStr);
+  } catch (err: any) {
+    throw new Error('Invalid Portable Proof: JSON parsing failed.');
+  }
+
+  if (!pkg.content || !pkg.secret || !pkg.author || !pkg.commitmentHash) {
+    throw new Error('Invalid Portable Proof Package: Missing required fields (content, secret, author, commitmentHash).');
+  }
+
+  return pkg as PrivateProofPackage;
+}
+
 /**
  * Export Proof file locally for Private Proof mode.
  */
-export function exportProofJSON(proof: InscribeSoulPrivateProofJSON) {
+export function exportProofJSON(proof: PrivateProofPackage) {
   const shortHash = proof.commitmentHash.slice(2, 10);
   const filename = `inscribesoul-proof-${shortHash}.json`;
   const jsonString = JSON.stringify(proof, null, 2);

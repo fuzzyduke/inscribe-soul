@@ -1,6 +1,6 @@
-# InscribeSoul Protocol Specification V1
+# InscribeSoul Protocol Specification V1.1
 
-**Protocol Version**: `INSCRIBESOUL_V1`
+**Protocol Version**: `INSCRIBESOUL_V1_1`
 
 ---
 
@@ -20,19 +20,57 @@ bytes32 public constant PRIVATE_DOMAIN = keccak256(bytes("INSCRIBESOUL_PRIVATE_V
 
 ### Public Inscription Proof Hash
 
-Public content hashes are derived on-chain to bind the author wallet and guarantee that the content emitted in the event matches the hash.
-
 $$\text{proofHash} = \text{keccak256}(\text{abi.encode}(\text{PUBLIC\_DOMAIN}, \text{authorAddress}, \text{content}))$$
 
 ### Private Proof Commitment Hash
-
-Private proof commitments are computed client-side using a cryptographically secure 32-byte secret salt (`window.crypto.getRandomValues`). Only the 32-byte commitment hash reaches the blockchain.
 
 $$\text{commitmentHash} = \text{keccak256}(\text{abi.encode}(\text{PRIVATE\_DOMAIN}, \text{authorAddress}, \text{secret}, \text{content}))$$
 
 ---
 
-## 3. Official Test Vectors
+## 3. Private Proof Package & Portable Blob Specification
+
+InscribeSoul uses a single canonical `PrivateProofPackage` schema that serializes into two portable recovery representations:
+
+### Canonical JSON Schema (`PrivateProofPackage`)
+
+```json
+{
+  "format": "INSCRIBESOUL_PROOF_PACKAGE_V1",
+  "protocol": "INSCRIBESOUL_PRIVATE_V1",
+  "label": "Concentrated Liquidity Lending Idea",
+  "content": "exact original text",
+  "secret": "0x...",
+  "author": "0x...",
+  "commitmentHash": "0x...",
+  "chainId": 84532,
+  "transactionHash": "0x...",
+  "blockNumber": 1234567,
+  "blockTimestamp": 1700000000,
+  "blockTimestampISO": "2026-08-08T00:00:00.000Z",
+  "contractAddress": "0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346"
+}
+```
+
+### Copyable Portable Proof Blob Specification
+
+- **Prefix**: `INSCRIBESOUL-PROOF-V1:`
+- **Encoding**: UTF-8 JSON $\longrightarrow$ Base64URL (url-safe, copy-paste resilient without line wraps or character mangling).
+- **Format**:
+  `INSCRIBESOUL-PROOF-V1:<base64url-encoded-utf8-json>`
+- **Security Property**: The Portable Proof Blob is sensitive recovery material. Anyone with access to it can read the original content and secret salt.
+
+---
+
+## 4. Optional Local Private Labels
+
+- **Purpose**: Helps users distinguish sealed inscriptions in browser UI.
+- **Privacy Boundary**: `label` is stored **ONLY** locally in browser storage or inside the user's exported `.json` proof / Portable Blob.
+- **Cryptographic Independence**: `label` **NEVER** enters `commitmentHash`, transaction calldata, smart contract events, or backend indexers.
+
+---
+
+## 5. Official Test Vectors
 
 Common Parameters across all test vectors:
 - **Author Wallet**: `0x4B6254BCdFf3D98845393f8594B1C5E6Ba6Dc75C`
@@ -67,19 +105,3 @@ Common Parameters across all test vectors:
 - **UTF-8 Hex**: `4c696e6520310d0a4c696e6520320d0a4c696e652033`
 - **Expected `proofHash` (Public)**: `0x1ed8f94db42c2d595d480f19448edaeeb795eeb0db3a96038c6b8e28db83ef54`
 - **Expected `commitmentHash` (Private)**: `0x4d9f68b26787c0968a27ed85371208ffea4d121375706017d3c569fcb4099248`
-
----
-
-### Vector 5: Leading & Trailing Whitespace
-- **Content**: `"  Idea with trailing space  "`
-- **UTF-8 Hex**: `202049646561207769746820747261696c696e672073706163652020`
-- **Expected `proofHash` (Public)**: `0x109d09d4715732f5f402b7ce917e495d5baf76b74691b24edea94126f216ed5b`
-- **Expected `commitmentHash` (Private)**: `0x903f1d3b96a41a507bd7f72afbabdd23e8b1e72015903d19399869db264e3f8e`
-
----
-
-### Vector 6: Single Character Difference (`Hello worle`)
-- **Content**: `"Hello worle"`
-- **UTF-8 Hex**: `48656c6c6f20776f726c65`
-- **Expected `proofHash` (Public)**: `0x27379a849db41898908591711bb244580d5a436aea004dadd3a7fdfe98c3d6de`
-- **Expected `commitmentHash` (Private)**: `0x010c72fad77741f6554dae726c666158b8dc5d97f56a4d563b4bcecd4eb8069c`

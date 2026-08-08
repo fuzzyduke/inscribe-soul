@@ -35,6 +35,7 @@ export function App() {
 
   // Form State
   const [contentText, setContentText] = useState('');
+  const [privateLabel, setPrivateLabel] = useState('');
   const [mode, setMode] = useState<'private' | 'public'>('public');
   const [selectedChainId, setSelectedChainId] = useState('baseSepolia');
   const [secret, setSecret] = useState<string>('');
@@ -232,6 +233,7 @@ export function App() {
         commitmentHash: currentProofHash,
         secret: mode === 'private' ? secret : undefined,
         originalText: contentText,
+        label: mode === 'private' && privateLabel.trim() ? privateLabel.trim() : undefined,
       });
 
       setIsPreviewOpen(false);
@@ -373,7 +375,13 @@ export function App() {
               </div>
 
               {/* Step 2: Preservation Mode Selector & Context Notice */}
-              <PreservationModeSelector mode={mode} setMode={setMode} secret={secret} />
+              <PreservationModeSelector
+                mode={mode}
+                setMode={setMode}
+                secret={secret}
+                label={privateLabel}
+                setLabel={setPrivateLabel}
+              />
 
               {/* Mempool Notice for Public Inscriptions */}
               {mode === 'public' && (
