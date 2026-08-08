@@ -48,7 +48,7 @@ InscribeSoul uses a single canonical `PrivateProofPackage` schema that serialize
   "blockNumber": 1234567,
   "blockTimestamp": 1700000000,
   "blockTimestampISO": "2026-08-08T00:00:00.000Z",
-  "contractAddress": "0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346"
+  "contractAddress": "0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB"
 }
 ```
 

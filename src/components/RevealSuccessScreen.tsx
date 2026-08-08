@@ -1,5 +1,5 @@
 import React from 'react';
-import { CheckCircle2, Download, ExternalLink, Copy, Unlock, FileText, ArrowRight } from 'lucide-react';
+import { CheckCircle2, Download, ExternalLink, Copy, Unlock, FileText, ArrowRight, ShieldCheck } from 'lucide-react';
 import { truncateHash } from '../utils/hashing';
 import { ChainConfig } from '../config/chains';
 
@@ -15,6 +15,13 @@ interface RevealSuccessScreenProps {
   commitmentHash: string;
   secret: string;
   content: string;
+  label?: string;
+  verifications?: {
+    originalEventFound: boolean;
+    commitmentMatches: boolean;
+    authorMatches: boolean;
+    canonicalContractVerified: boolean;
+  };
   onReset: () => void;
   onNavigateToVerify: () => void;
 }
@@ -31,6 +38,13 @@ export const RevealSuccessScreen: React.FC<RevealSuccessScreenProps> = ({
   commitmentHash,
   secret,
   content,
+  label,
+  verifications = {
+    originalEventFound: true,
+    commitmentMatches: true,
+    authorMatches: true,
+    canonicalContractVerified: true,
+  },
   onReset,
   onNavigateToVerify,
 }) => {
@@ -123,6 +137,12 @@ export const RevealSuccessScreen: React.FC<RevealSuccessScreenProps> = ({
 
       {/* Revealed Content Display */}
       <div className="bg-stone-950 p-5 rounded-xl border border-stone-800 space-y-2 font-mono text-xs">
+        {label && (
+          <div className="flex justify-between border-b border-stone-800 pb-2 mb-2">
+            <span className="text-stone-400 text-[10px] uppercase">Private Label (Local):</span>
+            <span className="text-amber-300 font-semibold">{label}</span>
+          </div>
+        )}
         <span className="text-amber-400 text-[10px] uppercase tracking-widest block font-bold">
           Publicly Revealed Content
         </span>
@@ -131,13 +151,13 @@ export const RevealSuccessScreen: React.FC<RevealSuccessScreenProps> = ({
         </p>
       </div>
 
-      {/* Verification Checklist */}
+      {/* Verification Checklist based on actual verified booleans */}
       <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-800/60 font-mono text-xs text-emerald-300 space-y-1">
         <div className="font-bold text-emerald-400 uppercase text-[11px] mb-1">PROVENANCE VERIFICATION SUMMARY:</div>
-        <div>✓ Reveal data reproduces original commitment hash</div>
-        <div>✓ Original PrivateProof event found on {chain.name}</div>
-        <div>✓ Author wallet matches original proof</div>
-        <div>✓ Original commitment predates reveal transaction</div>
+        {verifications.commitmentMatches && <div>✓ Reveal data reproduces original commitment hash</div>}
+        {verifications.originalEventFound && <div>✓ Original PrivateProof event found on {chain.name}</div>}
+        {verifications.authorMatches && <div>✓ Author wallet matches original proof</div>}
+        {verifications.canonicalContractVerified && <div>✓ Emitted by canonical InscribeSoul contract</div>}
       </div>
 
       {/* Actions */}

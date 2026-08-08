@@ -208,12 +208,12 @@ export const VerifyPage: React.FC = () => {
         return;
       }
 
-      // Standard Public or Private Proof Verification
+      // Standard Public or Private Proof Verification (Item 1: Preserves exact UTF-8 semantics)
       const cleanAuthor = ethers.getAddress(authorInput.trim());
       const computedHash =
         mode === 'private'
-          ? computePrivateCommitmentHash(cleanAuthor, secretInput.trim(), inputText.trim())
-          : computePublicProofHash(cleanAuthor, inputText.trim());
+          ? computePrivateCommitmentHash(cleanAuthor, secretInput.trim(), inputText)
+          : computePublicProofHash(cleanAuthor, inputText);
 
       if (txHashInput.trim()) {
         let receipt;

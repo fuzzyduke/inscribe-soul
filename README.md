@@ -57,7 +57,7 @@ $$\text{Write} \longrightarrow \text{Choose Privacy Mode} \longrightarrow \text{
 
 ### Mode 2: Private Proof
 - **Use Case**: Confidential startup ideas, inventions, research prior art, proprietary strategies, unreleased code.
-- **Privacy Level**: Zero-Knowledge Client-Side Commitment.
+- **Privacy Level**: Salted Client-Side Cryptographic Commitment.
 - **On-Chain Data**: Only the 32-byte `commitmentHash` is broadcast. Raw text and secret salt **NEVER** touch the network.
 - **Cryptographic Salt**: Every Private Proof generates a unique, cryptographically secure 32-byte secret salt (`window.crypto.getRandomValues`) to prevent offline dictionary/candidate guessing attacks.
 - **Client-Side Commitment Formula**:
@@ -71,6 +71,32 @@ $$\text{Write} \longrightarrow \text{Choose Privacy Mode} \longrightarrow \text{
 - **On-Chain Data**: Emits `ProofRevealed(author, originalCommitmentHash, originalTransactionHash, secret, content, timestamp)`.
 - **Smart Contract Verification**:
   Recomputes $\text{keccak256}(\text{PRIVATE\_DOMAIN}, \text{msg.sender}, \text{secret}, \text{content})$ live on-chain and verifies it equals `originalCommitmentHash` before emitting the event.
+
+---
+
+## Live V1.1 Reveal Validation Example
+
+The following is an actual, live execution lifecycle recorded on Base Sepolia:
+
+- **Network**: Base Sepolia (`chainId: 84532`)
+- **Canonical V1.1 Contract**: [`0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB`](https://sepolia.basescan.org/address/0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB)
+- **Author Wallet**: `0x4B6254BCdFf3D98845393f8594B1C5E6Ba6Dc75C`
+- **Original Private Proof Transaction**: [`0x4684bdcc7d76200b96951158df4e3c482acf3a2d6f5cba3a557048ff42f937c1`](https://sepolia.basescan.org/tx/0x4684bdcc7d76200b96951158df4e3c482acf3a2d6f5cba3a557048ff42f937c1)
+- **Original Private Commitment Hash**: `0x89ee78787ed0066a9bb82c0015cc362d0249ca50b827a6a3c10be41b79edcf15`
+- **Original Block Height**: `#45207153` (Timestamp: `2026-08-08T09:47:48.000Z`)
+- **Reveal Transaction Hash**: [`0xd557818322d26018cfb77b66be4d78746fb9126b001b3377a7f515b71fcd0141`](https://sepolia.basescan.org/tx/0xd557818322d26018cfb77b66be4d78746fb9126b001b3377a7f515b71fcd0141)
+- **Reveal Block Height**: `#45207192` (Timestamp: `2026-08-08T09:49:45.000Z`)
+- **Revealed Content**: `"hidden 6"`
+
+### On-Chain Provenance Verification Result:
+```text
+✓ Original PrivateProof event exists on Base Sepolia
+✓ Original event emitted by canonical InscribeSoul contract 0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB
+✓ Original author matches (0x4B6254...6Dc75C)
+✓ Revealed content + secret reproduce original commitment 0x89ee78...edcf15
+✓ Reveal author matches original author
+✓ Original proof (#45207153) predates Reveal (#45207192)
+```
 
 ---
 
@@ -96,7 +122,11 @@ InscribeSoul V1.1 hashes exact UTF-8 content. Any character, whitespace, trailin
 
 ## Smart Contract Specification
 
-The canonical Solidity implementation is maintained strictly in [`contracts/InscribeSoul.sol`](file:///c:/Users/graci/.gemini/antigravity-ide/scratch/inscribesoul/contracts/InscribeSoul.sol).
+The canonical Solidity implementation is maintained strictly in [`contracts/InscribeSoul.sol`](contracts/InscribeSoul.sol).
+
+### Historical Canonical Contracts Accepted for Provenance:
+- `INSCRIBESOUL_V1` (Base Sepolia): `0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346`
+- `INSCRIBESOUL_V1_1` (Base Sepolia Canonical): `0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB`
 
 ### Overview:
 - **Solidity Version**: `^0.8.24`
@@ -117,7 +147,7 @@ npm install
 # Run Vite dev server
 npm run dev
 
-# Run Hardhat test suite (43 passing tests)
+# Run Hardhat test suite (39 passing tests)
 npx hardhat test
 
 # Build production bundle

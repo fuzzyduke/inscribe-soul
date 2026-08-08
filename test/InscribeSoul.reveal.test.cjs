@@ -202,5 +202,25 @@ describe("InscribeSoul Reveal Proof Contract & Recovery Test Suite (Items 1-30)"
         )
       ).to.emit(contract, "ProofRevealed");
     });
+
+    it("26-28. Manual recovery preserves exact whitespace semantics (leading, trailing, CRLF)", function () {
+      const secret = "0x" + "b".repeat(64);
+      const rawLeading = "   Leading spaces matter";
+      const rawTrailing = "Trailing spaces matter   ";
+      const rawCRLF = "Line 1\r\nLine 2";
+
+      const hashLeading = computePrivateCommitmentHash(user.address, secret, rawLeading);
+      const hashTrimmedLeading = computePrivateCommitmentHash(user.address, secret, rawLeading.trim());
+
+      const hashTrailing = computePrivateCommitmentHash(user.address, secret, rawTrailing);
+      const hashTrimmedTrailing = computePrivateCommitmentHash(user.address, secret, rawTrailing.trim());
+
+      const hashCRLF = computePrivateCommitmentHash(user.address, secret, rawCRLF);
+      const hashLF = computePrivateCommitmentHash(user.address, secret, "Line 1\nLine 2");
+
+      expect(hashLeading).to.not.equal(hashTrimmedLeading);
+      expect(hashTrailing).to.not.equal(hashTrimmedTrailing);
+      expect(hashCRLF).to.not.equal(hashLF);
+    });
   });
 });

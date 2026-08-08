@@ -93,10 +93,10 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
     }
   };
 
-  // Manual Recovery Handler
+  // Manual Recovery Handler (Preserves Exact UTF-8 Content without trim())
   const handleManualRecovery = async () => {
-    if (!manualText.trim()) {
-      setErrorMsg('Exact Original Text is required for manual recovery.');
+    if (manualText.length === 0) {
+      setErrorMsg('Original Text is required for manual recovery.');
       return;
     }
     if (!manualSecret.trim() || !manualSecret.trim().startsWith('0x') || manualSecret.trim().length !== 66) {
@@ -113,7 +113,8 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
 
     try {
       const cleanAuthor = validateAndChecksumAddress(account);
-      const computedHash = computePrivateCommitmentHash(cleanAuthor, manualSecret.trim(), manualText.trim());
+      // Item 1 Fix: Pass exact manualText without trim() to preserve exact UTF-8 semantics
+      const computedHash = computePrivateCommitmentHash(cleanAuthor, manualSecret.trim(), manualText);
 
       // If opened from a specific My Inscriptions entry
       if (initialProofItem && initialProofItem.contentHash) {
@@ -158,9 +159,12 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
 
       const matchedLog = logs[0];
       const block = await provider.getBlock(matchedLog.blockNumber);
-      const canonicalBlockTimestampISO = block
-        ? new Date(block.timestamp * 1000).toISOString()
-        : 'Block timestamp verified';
+      
+      // Item 4 & 5 Fix: Strict RPC Block Timestamp without local time fallback
+      if (!block || !block.timestamp) {
+        throw new Error(`Blockchain Header Error: Canonical block timestamp for block #${matchedLog.blockNumber} is temporarily unavailable.`);
+      }
+      const canonicalBlockTimestampISO = new Date(block.timestamp * 1000).toISOString();
 
       setVerificationDetails({
         chain,
@@ -169,9 +173,15 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
         origTxHash: matchedLog.transactionHash,
         origBlockNumber: matchedLog.blockNumber,
         origBlockTimestampISO: canonicalBlockTimestampISO,
-        content: manualText.trim(),
+        content: manualText,
         secret: manualSecret.trim(),
         label: initialProofItem?.label,
+        verifications: {
+          originalEventFound: true,
+          commitmentMatches: true,
+          authorMatches: true,
+          canonicalContractVerified: true,
+        },
       });
 
       setStep('verified');
@@ -182,7 +192,7 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
     }
   };
 
-  // Unified Proof Package Validation (Used by JSON upload & Blob)
+  // Strict Proof Package Validation (Items 2, 3, 5, 12, 13)
   const validateProofPackage = async (data: Partial<PrivateProofPackage> & Record<string, any>) => {
     setIsValidating(true);
     setErrorMsg(null);
@@ -198,6 +208,7 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
         throw new Error(`Wrong Wallet: This proof belongs to ${truncateHash(cleanAuthor, 6, 4)}. Connect the original author wallet to reveal it.`);
       }
 
+      // Exact content without trim()
       const computedHash = computePrivateCommitmentHash(cleanAuthor, data.secret!, data.content!);
       if (computedHash.toLowerCase() !== data.commitmentHash!.toLowerCase()) {
         throw new Error('Commitment Mismatch: Recomputed hash does not match commitment stored in proof package.');
@@ -214,9 +225,20 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
 
       const provider = new ethers.JsonRpcProvider(chain.rpcUrl, undefined, { staticNetwork: true });
 
+      // Item 13: Contract Preflight Verification before transaction lookup
+      const code = await provider.getCode(chain.contractAddress).catch(() => '0x');
+      if (code === '0x' || code === '0x0') {
+        throw new Error(`Contract Bytecode Mismatch: No contract bytecode exists at ${chain.contractAddress} on ${chain.name}.`);
+      }
+
+      const contractView = new ethers.Contract(chain.contractAddress, CONTRACT_ABI, provider);
+      const protocolVersion = await contractView.PROTOCOL_VERSION().catch(() => '');
+      if (protocolVersion !== 'INSCRIBESOUL_V1_1' && protocolVersion !== 'INSCRIBESOUL_V1') {
+        throw new Error(`Contract Version Mismatch: Expected INSCRIBESOUL_V1_1 or INSCRIBESOUL_V1, received '${protocolVersion}'.`);
+      }
+
       let origTxHash = data.transactionHash;
       let origBlockNumber: any = data.blockNumber;
-      let canonicalBlockTimestampISO = data.blockTimestampISO || 'Block timestamp verified';
 
       // Auto-discover tx if txHash missing in package
       if (!origTxHash) {
@@ -234,21 +256,53 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
 
         const logs = await provider.getLogs(filter).catch(() => []);
         if (logs.length === 0) {
-          throw new Error('Provenance Failure: No matching PrivateProof log found on-chain.');
+          throw new Error('PROVENANCE FAILURE: No matching PrivateProof log found on-chain for this commitment.');
         }
         origTxHash = logs[0].transactionHash;
         origBlockNumber = logs[0].blockNumber;
       }
 
+      // Item 2 Fix: Strictly verify original transaction targeted canonical contract & emitted PrivateProof event
       const receipt = await provider.getTransactionReceipt(origTxHash);
       if (!receipt) {
-        throw new Error(`Original Transaction Not Found on ${chain.name}.`);
+        throw new Error(`Original Transaction Not Found: No receipt exists on ${chain.name} for ${origTxHash}.`);
       }
 
-      const block = await provider.getBlock(receipt.blockNumber);
-      if (block) {
-        canonicalBlockTimestampISO = new Date(block.timestamp * 1000).toISOString();
+      if (receipt.to?.toLowerCase() !== chain.contractAddress.toLowerCase()) {
+        throw new Error(`PROVENANCE FAILURE: Original transaction was sent to ${receipt.to}, not canonical contract ${chain.contractAddress}.`);
       }
+
+      const iface = new ethers.Interface(CONTRACT_ABI);
+      let matchedPrivateProofEvent = false;
+
+      for (const log of receipt.logs) {
+        try {
+          if (log.address.toLowerCase() === chain.contractAddress.toLowerCase()) {
+            const parsed = iface.parseLog(log);
+            if (
+              parsed &&
+              parsed.name === 'PrivateProof' &&
+              parsed.args.author.toLowerCase() === cleanAuthor.toLowerCase() &&
+              parsed.args.commitmentHash.toLowerCase() === data.commitmentHash!.toLowerCase()
+            ) {
+              matchedPrivateProofEvent = true;
+              break;
+            }
+          }
+        } catch (e) {}
+      }
+
+      if (!matchedPrivateProofEvent) {
+        throw new Error('PROVENANCE FAILURE: The referenced transaction does not contain the expected PrivateProof event for this author and commitment.');
+      }
+
+      // Item 3 & 4 Fix: Strictly re-fetch canonical block header from RPC without package metadata or local clock fallback
+      const block = await provider.getBlock(receipt.blockNumber);
+      if (!block || !block.timestamp) {
+        throw new Error(`Blockchain Header Error: Canonical block header for block #${receipt.blockNumber} is temporarily unavailable.`);
+      }
+
+      const canonicalBlockTimestampISO = new Date(block.timestamp * 1000).toISOString();
 
       setVerificationDetails({
         chain,
@@ -260,6 +314,12 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
         content: data.content,
         secret: data.secret,
         label: data.label,
+        verifications: {
+          originalEventFound: true,
+          commitmentMatches: true,
+          authorMatches: true,
+          canonicalContractVerified: true,
+        },
       });
 
       setStep('verified');
@@ -270,6 +330,7 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
     }
   };
 
+  // Item 13 & 14 Fix: Preflight checks before submitting revealProof
   const handleConfirmRevealTx = async () => {
     if (!verificationDetails || !account) return;
     setIsSubmitting(true);
@@ -282,6 +343,7 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
 
       const chain = verificationDetails.chain;
 
+      // 1. Preflight Chain Switch
       try {
         await window.ethereum.request({
           method: 'wallet_switchEthereumChain',
@@ -292,8 +354,20 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
       }
 
       const provider = new ethers.BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
+      
+      // 2. Preflight Contract Bytecode & Protocol Version Check
+      const code = await provider.getCode(chain.contractAddress);
+      if (code === '0x' || code === '0x0') {
+        throw new Error(`Contract Execution Error: No bytecode exists at ${chain.contractAddress} on ${chain.name}.`);
+      }
 
+      const contractView = new ethers.Contract(chain.contractAddress, CONTRACT_ABI, provider);
+      const protocolVersion = await contractView.PROTOCOL_VERSION().catch(() => '');
+      if (protocolVersion !== 'INSCRIBESOUL_V1_1') {
+        throw new Error(`Contract Version Mismatch: Contract at ${chain.contractAddress} is running version '${protocolVersion}'. Version INSCRIBESOUL_V1_1 is required for on-chain reveals.`);
+      }
+
+      const signer = await provider.getSigner();
       const contract = new ethers.Contract(chain.contractAddress, CONTRACT_ABI, signer);
       const requiredFee = await contract.protocolFee().catch(() => 0n);
 
@@ -307,10 +381,13 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
 
       const receipt = await tx.wait(1);
 
+      // Item 4 & 5 Fix: Re-fetch canonical block header strictly from RPC
       const revealBlock = await provider.getBlock(receipt.blockNumber);
-      const revealTimestampISO = revealBlock
-        ? new Date(revealBlock.timestamp * 1000).toISOString()
-        : new Date().toISOString();
+      if (!revealBlock || !revealBlock.timestamp) {
+        throw new Error(`Reveal Transaction Confirmed, but canonical block header for #${receipt.blockNumber} is temporarily unavailable from RPC.`);
+      }
+
+      const revealTimestampISO = new Date(revealBlock.timestamp * 1000).toISOString();
 
       onSuccess({
         mode: 'reveal',
@@ -326,6 +403,7 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
         secret: verificationDetails.secret,
         content: verificationDetails.content,
         label: verificationDetails.label,
+        verifications: verificationDetails.verifications,
       });
 
       onClose();
@@ -334,7 +412,7 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
       let msg = err.reason || err.shortMessage || err.message || 'Reveal transaction rejected or failed.';
       
       if (msg.includes('missing revert data') || msg.includes('CALL_EXCEPTION') || err.code === 'CALL_EXCEPTION') {
-        msg = `Contract Execution Reverted (missing revert data): The deployed contract at ${verificationDetails.chain.contractAddress} on ${verificationDetails.chain.name} is currently running protocol INSCRIBESOUL_V1, which does not support on-chain reveals yet. To test Reveal transactions on Base Sepolia, deploy the INSCRIBESOUL_V1_1 contract via the "Deploy Contract" modal (Dev mode) or update the canonical contract address.`;
+        msg = `Contract Execution Reverted: The transaction failed on contract ${verificationDetails.chain.contractAddress} on ${verificationDetails.chain.name}. Verify that your connected wallet is the original author of this Private Proof.`;
       }
 
       setErrorMsg(msg);
@@ -472,17 +550,17 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
             {tab === 'manual' && (
               <div className="space-y-4 font-mono text-xs">
                 <p className="text-stone-400 font-sans text-xs leading-relaxed">
-                  Enter your exact original text and 32-byte secret salt key. InscribeSoul will compute your commitment and auto-discover your on-chain transaction history.
+                  Enter your exact original text (every space, line break, and character must match) and 32-byte secret salt key.
                 </p>
 
                 <div className="space-y-2">
                   <label className="text-stone-400 uppercase text-[11px] tracking-wider block">
-                    1. Exact Original Text
+                    1. Exact Original Text (Preserves UTF-8 semantics)
                   </label>
                   <textarea
                     value={manualText}
                     onChange={(e) => setManualText(e.target.value)}
-                    placeholder="Paste exact original text (every space, line break, and character must match)..."
+                    placeholder="Paste exact original text..."
                     rows={4}
                     className="w-full bg-stone-950 border border-stone-800 focus:border-amber-700 rounded-xl p-3 text-stone-200 text-xs font-mono focus:outline-none resize-none"
                   />

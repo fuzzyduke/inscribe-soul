@@ -74,7 +74,7 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
             } catch (e) {}
           }
 
-          // 2. Fetch ProofRevealed Events
+          // 2. Fetch ProofRevealed Events & Index by Composite Key (commitmentHash + origTxHash + author)
           const revealedCommitments = new Map<string, any>();
           const revealFilter = {
             address: chain.contractAddress,
@@ -86,19 +86,28 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
             toBlock: 'latest',
           };
 
-          const revealLogs = await provider.getLogs(revealFilter).catch(async () => {
+          let revealLogs = await provider.getLogs(revealFilter).catch(async () => {
             const fallbackFromBlock = Math.max(0, currentBlock - 1999);
             return await provider.getLogs({ ...revealFilter, fromBlock: fallbackFromBlock }).catch(() => []);
           });
+
+          // Sort reveal logs strictly by blockchain block order (blockNumber ascending, then index)
+          revealLogs.sort((a, b) => a.blockNumber - b.blockNumber || a.index - b.index);
 
           for (const log of revealLogs) {
             try {
               const parsed = iface.parseLog(log);
               if (parsed) {
                 const origCommit = parsed.args.originalCommitmentHash.toLowerCase();
-                // Store earliest reveal log
-                if (!revealedCommitments.has(origCommit)) {
-                  revealedCommitments.set(origCommit, {
+                const origTx = parsed.args.originalTransactionHash.toLowerCase();
+                const authorAddr = parsed.args.author.toLowerCase();
+
+                // Composite matching key: commitment + origTx + author
+                const compositeKey = `${origCommit}:${origTx}:${authorAddr}`;
+
+                // Store earliest reveal log in blockchain block order
+                if (!revealedCommitments.has(compositeKey)) {
+                  revealedCommitments.set(compositeKey, {
                     revealTxHash: log.transactionHash,
                     revealBlockNumber: log.blockNumber,
                     revealTimestamp: new Date(Number(parsed.args.timestamp) * 1000).toLocaleDateString(),
@@ -131,7 +140,8 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
               const parsed = iface.parseLog(log);
               if (parsed) {
                 const commitHash = parsed.args.commitmentHash;
-                const revealData = revealedCommitments.get(commitHash.toLowerCase());
+                const compositeKey = `${commitHash.toLowerCase()}:${log.transactionHash.toLowerCase()}:${parsed.args.author.toLowerCase()}`;
+                const revealData = revealedCommitments.get(compositeKey);
 
                 records.push({
                   chain: chain.name,
