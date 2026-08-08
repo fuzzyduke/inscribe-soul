@@ -1,9 +1,9 @@
-# InscribeSoul V1 — Protocol & Application
+# InscribeSoul V1.1 — Protocol & Application
 
 > **“Give your idea a permanent place in history.”**
 
 **Target Subdomain**: `inscribesoul.valhallala.com`  
-**Protocol Version**: `INSCRIBESOUL_V1`  
+**Protocol Version**: `INSCRIBESOUL_V1_1`  
 
 ---
 
@@ -11,7 +11,7 @@
 
 | Network | Status | Canonical Contract Address | Selectable in UI |
 | :--- | :--- | :--- | :--- |
-| **Base Sepolia (Testnet)** | **LIVE TESTNET** | [`0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346`](https://sepolia.basescan.org/address/0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346) | **Yes** |
+| **Base Sepolia (Testnet)** | **LIVE V1.1 TESTNET** | [`0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB`](https://sepolia.basescan.org/address/0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB) | **Yes** |
 | **Base Mainnet** | NOT DEPLOYED | `N/A (Coming Soon)` | No |
 | **Ethereum Sepolia** | NOT DEPLOYED | `N/A (Coming Soon)` | No |
 | **Ethereum Mainnet** | NOT DEPLOYED | `N/A (Coming Soon)` | No |
@@ -24,14 +24,14 @@
 
 The product deliberately excludes tokens, NFTs, social features, market dynamics, file storage, or centralized databases. It focuses entirely on a clean core lifecycle:
 
-$$\text{Write} \longrightarrow \text{Choose Privacy Mode} \longrightarrow \text{Choose Chain} \longrightarrow \text{Inscribe} \longrightarrow \text{Verify}$$
+$$\text{Write} \longrightarrow \text{Choose Privacy Mode} \longrightarrow \text{Choose Chain} \longrightarrow \text{Inscribe} \longrightarrow \text{Verify / Reveal}$$
 
 ---
 
 ## Architectural Principles
 
 1. **On-Chain Permanence via EVM Logs**:
-   - Inscriptions are emitted as indexed EVM smart contract event logs (`PublicInscription` and `PrivateProof`).
+   - Inscriptions are emitted as indexed EVM smart contract event logs (`PublicInscription`, `PrivateProof`, and `ProofRevealed`).
    - No central database or off-chain API indexer is required to query or verify proof history.
 
 2. **Client-Side Privacy Guarantee**:
@@ -43,7 +43,7 @@ $$\text{Write} \longrightarrow \text{Choose Privacy Mode} \longrightarrow \text{
 
 ---
 
-## Preservation Modes
+## Preservation & Reveal Modes
 
 ### Mode 1: Permanent Public Inscription (Default)
 - **Use Case**: Public announcements, manifestos, open predictions, public disclosures.
@@ -65,11 +65,32 @@ $$\text{Write} \longrightarrow \text{Choose Privacy Mode} \longrightarrow \text{
 
 ---
 
+### Mode 3: Reveal Proof (V1.1 Capability)
+- **Use Case**: Publicly unsealing a previously recorded Private Proof while cryptographically proving when the idea was originally committed.
+- **Privacy Level**: Unsealed / Revealed.
+- **On-Chain Data**: Emits `ProofRevealed(author, originalCommitmentHash, originalTransactionHash, secret, content, timestamp)`.
+- **Smart Contract Verification**:
+  Recomputes $\text{keccak256}(\text{PRIVATE\_DOMAIN}, \text{msg.sender}, \text{secret}, \text{content})$ live on-chain and verifies it equals `originalCommitmentHash` before emitting the event.
+
+---
+
+## Recovery Material & Portable Proof Blob
+
+To ensure users never need to record or manage raw technical hashes:
+
+1. **Downloadable JSON Proof File**:
+   Contains complete `PrivateProofPackage` JSON (`inscribesoul-proof-XXXXXXXX.json`).
+2. **Copyable Portable Proof Blob**:
+   Format: `INSCRIBESOUL-PROOF-V1:<base64url-encoded-utf8-json>`
+   Copy-paste safe, versioned string that can be backed up in password managers or encrypted notes.
+3. **Manual Recovery**:
+   Given **Exact Original Text** + **Secret Salt Key**, InscribeSoul automatically queries blockchain RPC logs to discover the original commitment transaction hash, block height, and timestamp.
+
+---
+
 ## Exact UTF-8 Content Semantics
 
-InscribeSoul V1 hashes exact UTF-8 content. Any character, whitespace, trailing space, line-ending (CRLF vs LF), or capitalization change creates a completely different proof hash.
-
-**Any character, whitespace, encoding-relevant change, or line-ending change produces a different proof.**
+InscribeSoul V1.1 hashes exact UTF-8 content. Any character, whitespace, trailing space, line-ending (CRLF vs LF), or capitalization change creates a completely different proof hash.
 
 ---
 
@@ -78,11 +99,12 @@ InscribeSoul V1 hashes exact UTF-8 content. Any character, whitespace, trailing 
 The canonical Solidity implementation is maintained strictly in [`contracts/InscribeSoul.sol`](file:///c:/Users/graci/.gemini/antigravity-ide/scratch/inscribesoul/contracts/InscribeSoul.sol).
 
 ### Overview:
-- **Solidity Version**: `^0.8.20`
-- **Ownership / Admin**: `Ownable` (allows updating `protocolFee` capped by `MAX_PROTOCOL_FEE = 0.1 ether`)
+- **Solidity Version**: `^0.8.24`
+- **Protocol Version**: `INSCRIBESOUL_V1_1`
 - **Event Signatures**:
   - `PublicInscription(address indexed author, bytes32 indexed proofHash, string content, uint256 timestamp)`
   - `PrivateProof(address indexed author, bytes32 indexed commitmentHash, uint256 timestamp)`
+  - `ProofRevealed(address indexed author, bytes32 indexed originalCommitmentHash, bytes32 indexed originalTransactionHash, bytes32 secret, string content, uint256 timestamp)`
 
 ---
 
@@ -95,7 +117,7 @@ npm install
 # Run Vite dev server
 npm run dev
 
-# Run Hardhat security & integration test suite
+# Run Hardhat test suite (43 passing tests)
 npx hardhat test
 
 # Build production bundle
