@@ -331,7 +331,13 @@ export const RevealProofModal: React.FC<RevealProofModalProps> = ({
       onClose();
     } catch (err: any) {
       console.error('Reveal Transaction Error:', err);
-      setErrorMsg(err.reason || err.shortMessage || err.message || 'Reveal transaction rejected or failed.');
+      let msg = err.reason || err.shortMessage || err.message || 'Reveal transaction rejected or failed.';
+      
+      if (msg.includes('missing revert data') || msg.includes('CALL_EXCEPTION') || err.code === 'CALL_EXCEPTION') {
+        msg = `Contract Execution Reverted (missing revert data): The deployed contract at ${verificationDetails.chain.contractAddress} on ${verificationDetails.chain.name} is currently running protocol INSCRIBESOUL_V1, which does not support on-chain reveals yet. To test Reveal transactions on Base Sepolia, deploy the INSCRIBESOUL_V1_1 contract via the "Deploy Contract" modal (Dev mode) or update the canonical contract address.`;
+      }
+
+      setErrorMsg(msg);
     } finally {
       setIsSubmitting(false);
     }
