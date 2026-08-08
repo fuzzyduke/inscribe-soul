@@ -1,5 +1,5 @@
-import React from 'react';
-import { CheckCircle2, Download, ExternalLink, Copy, FileText, AlertTriangle, Clock, Layers } from 'lucide-react';
+import React, { useState } from 'react';
+import { CheckCircle2, Download, ExternalLink, Copy, FileText, AlertTriangle, Clock, Layers, Check } from 'lucide-react';
 import { truncateHash, exportProofJSON } from '../utils/hashing';
 import { ChainConfig } from '../config/chains';
 
@@ -32,7 +32,8 @@ export const SuccessScreen: React.FC<SuccessScreenProps> = ({
   onReset,
   onNavigateToProof,
 }) => {
-  const [copied, setCopied] = React.useState(false);
+  const [copied, setCopied] = useState(false);
+  const [downloaded, setDownloaded] = useState(false);
 
   const handleCopyHash = () => {
     navigator.clipboard.writeText(commitmentHash);
@@ -56,6 +57,7 @@ export const SuccessScreen: React.FC<SuccessScreenProps> = ({
       contractAddress: chain.contractAddress,
       clientCreationTimeISO: new Date().toISOString(),
     });
+    setDownloaded(true);
   };
 
   return (
@@ -98,77 +100,83 @@ export const SuccessScreen: React.FC<SuccessScreenProps> = ({
         </div>
 
         <div className="flex justify-between items-center">
-          <span className="text-stone-400">Block Height:</span>
+          <span className="text-stone-400">L2 Block Height:</span>
           <span className="text-stone-200">#{blockNumber}</span>
         </div>
 
-        <div className="flex justify-between items-start pt-3 border-t border-stone-800">
-          <span className="text-stone-400">Proof Hash:</span>
-          <div className="text-right">
-            <span className="text-amber-400 font-mono text-[11px] block break-all">
-              {commitmentHash}
-            </span>
+        <div className="pt-3 border-t border-stone-800 space-y-2">
+          <div className="flex justify-between items-center">
+            <span className="text-stone-400">Content Proof Hash (V1):</span>
+            <button
+              onClick={handleCopyHash}
+              className="text-amber-400 hover:text-amber-300 flex items-center gap-1 text-[11px]"
+            >
+              <Copy className="w-3 h-3" />
+              {copied ? 'Copied!' : 'Copy Hash'}
+            </button>
           </div>
-        </div>
-
-        <div className="flex justify-between items-start pt-2">
-          <span className="text-stone-400">Transaction:</span>
-          <a
-            href={`${chain.blockExplorerUrl}/tx/${txHash}`}
-            target="_blank"
-            rel="noreferrer"
-            className="text-stone-300 hover:text-amber-400 font-mono text-[11px] flex items-center gap-1 transition-colors"
-          >
-            {truncateHash(txHash, 10, 8)}
-            <ExternalLink className="w-3 h-3" />
-          </a>
+          <p className="text-stone-300 text-[11px] break-all bg-stone-900 p-2.5 rounded border border-stone-800">
+            {commitmentHash}
+          </p>
         </div>
       </div>
 
-      {/* Warning Banner for Private Mode */}
-      {mode === 'private' && (
-        <div className="p-4 bg-amber-950/30 border border-amber-800/50 rounded-xl flex items-start gap-3 text-xs text-amber-200 font-sans">
-          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-          <div>
-            <strong className="block font-mono uppercase text-[11px] text-amber-300 mb-1">
-              Critical Warning: Proof File & Secret
+      {/* Private Proof Download Prompt & Warning */}
+      {mode === 'private' ? (
+        <div className="p-5 rounded-xl bg-amber-950/30 border border-amber-800/50 space-y-4 text-xs font-sans text-amber-200/90 shadow-md">
+          <div className="space-y-1">
+            <strong className="block font-mono uppercase text-amber-300 text-[11px] tracking-wider font-bold">
+              Private Proof Retention Notice
             </strong>
-            If you lose this proof file or secret key, InscribeSoul cannot recover your private inscription.
+            <p className="text-stone-300 text-xs leading-relaxed">
+              The blockchain stores <strong>only your cryptographic commitment hash</strong>. Your proof file contains the secret key required to reveal and verify your original content. InscribeSoul cannot recover it for you.
+            </p>
           </div>
+
+          <div className="flex items-center gap-4 pt-1">
+            <button
+              onClick={handleDownloadProof}
+              className={`flex-1 py-3 px-4 font-mono text-xs uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-2 font-bold shadow-lg ${
+                downloaded
+                  ? 'bg-emerald-950/80 border border-emerald-700 text-emerald-300'
+                  : 'bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-stone-950'
+              }`}
+            >
+              {downloaded ? (
+                <>
+                  <Check className="w-4 h-4 text-emerald-400" />
+                  Proof File Downloaded ✓
+                </>
+              ) : (
+                <>
+                  <Download className="w-4 h-4 text-stone-950" />
+                  Download Proof File (.json)
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="p-4 rounded-xl bg-stone-950/60 border border-stone-800 text-xs text-stone-400 font-sans leading-relaxed">
+          <strong>Public Provenance Recorded:</strong> Your inscription and text are now permanently recorded in transaction logs on {chain.name}.
         </div>
       )}
 
-      {/* Action Toolbar */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 font-mono text-xs">
-        {mode === 'private' && originalText && secret && (
-          <button
-            onClick={handleDownloadProof}
-            className="py-3 px-4 bg-amber-950/50 hover:bg-amber-900/60 border border-amber-700/60 text-amber-200 rounded-xl transition-all flex items-center justify-center gap-2 shadow-md"
-          >
-            <Download className="w-4 h-4 text-amber-400" />
-            Download Proof File (.json)
-          </button>
-        )}
-
-        <button
-          onClick={handleCopyHash}
-          className="py-3 px-4 bg-stone-800 hover:bg-stone-700 border border-stone-700 text-stone-200 rounded-xl transition-all flex items-center justify-center gap-2"
+      {/* Bottom Actions */}
+      <div className="flex flex-col sm:flex-row items-center gap-3 pt-2">
+        <a
+          href={`${chain.blockExplorerUrl}/tx/${txHash}`}
+          target="_blank"
+          rel="noreferrer"
+          className="w-full sm:flex-1 py-3 bg-stone-800 hover:bg-stone-700 text-stone-200 font-mono text-xs uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-2 text-center"
         >
-          <Copy className="w-4 h-4 text-stone-400" />
-          {copied ? 'Copied Hash!' : 'Copy Proof Hash'}
-        </button>
-
-        <button
-          onClick={onNavigateToProof}
-          className="py-3 px-4 bg-stone-800 hover:bg-stone-700 border border-stone-700 text-stone-200 rounded-xl transition-all flex items-center justify-center gap-2"
-        >
-          <FileText className="w-4 h-4 text-stone-400" />
-          View Inscription Page
-        </button>
+          <ExternalLink className="w-4 h-4 text-stone-400" />
+          View on BaseScan
+        </a>
 
         <button
           onClick={onReset}
-          className="py-3 px-4 bg-gradient-to-r from-stone-800 to-stone-900 hover:from-stone-700 hover:to-stone-800 border border-stone-700 text-amber-400 rounded-xl transition-all flex items-center justify-center gap-2"
+          className="w-full sm:flex-1 py-3 bg-stone-900 border border-stone-700 hover:border-amber-800/60 text-stone-300 hover:text-amber-300 font-mono text-xs uppercase tracking-wider rounded-xl transition-all"
         >
           Inscribe Another Thought
         </button>

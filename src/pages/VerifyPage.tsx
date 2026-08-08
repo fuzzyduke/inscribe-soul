@@ -3,7 +3,7 @@ import {
   computePrivateCommitmentHash,
   computePublicProofHash,
 } from '../utils/hashing';
-import { SUPPORTED_CHAINS } from '../config/chains';
+import { SUPPORTED_CHAINS, CONTRACT_ABI } from '../config/chains';
 import { CheckCircle2, XCircle, Search, ShieldAlert, KeyRound, AlertTriangle, WifiOff, FileCheck } from 'lucide-react';
 import { ethers } from 'ethers';
 
@@ -16,7 +16,7 @@ export const VerifyPage: React.FC = () => {
   const [txHashInput, setTxHashInput] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
   const [result, setResult] = useState<{
-    status: 'idle' | 'success' | 'notFound' | 'rpcError' | 'error';
+    status: 'idle' | 'success' | 'notFound' | 'rpcError' | 'invalidContract' | 'error';
     computedHash?: string;
     matchedTx?: any;
     errorMessage?: string;
@@ -66,24 +66,70 @@ export const VerifyPage: React.FC = () => {
           : computePublicProofHash(cleanAuthor, inputText.trim());
 
       const chain = SUPPORTED_CHAINS[selectedChainId];
-      if (!chain) throw new Error('Invalid chain selected');
+      if (!chain || chain.deploymentStatus === 'coming_soon' || !chain.contractAddress) {
+        setResult({
+          status: 'error',
+          errorMessage: `Chain Not Supported: InscribeSoul V1 is not yet deployed on ${chain?.name || selectedChainId}.`,
+        });
+        setIsVerifying(false);
+        return;
+      }
 
       const provider = new ethers.JsonRpcProvider(chain.rpcUrl, undefined, { staticNetwork: true });
 
-      const iface = new ethers.Interface([
-        "event PublicInscription(address indexed author, bytes32 indexed proofHash, string content, uint256 timestamp)",
-        "event PrivateProof(address indexed author, bytes32 indexed commitmentHash, uint256 timestamp)"
-      ]);
+      // Verify contract existence and version before querying
+      const code = await provider.getCode(chain.contractAddress).catch(() => '0x');
+      if (code === '0x' || code === '0x0') {
+        setResult({
+          status: 'invalidContract',
+          errorMessage: `No InscribeSoul smart contract bytecode exists at ${chain.contractAddress} on ${chain.name}.`,
+        });
+        setIsVerifying(false);
+        return;
+      }
+
+      const contract = new ethers.Contract(chain.contractAddress, CONTRACT_ABI, provider);
+      const contractVersion = await contract.PROTOCOL_VERSION().catch(() => '');
+      if (contractVersion !== 'INSCRIBESOUL_V1') {
+        setResult({
+          status: 'invalidContract',
+          errorMessage: `Not an InscribeSoul V1 Contract: Contract at ${chain.contractAddress} returned version '${contractVersion}', expected 'INSCRIBESOUL_V1'.`,
+        });
+        setIsVerifying(false);
+        return;
+      }
+
+      const iface = new ethers.Interface(CONTRACT_ABI);
 
       if (txHashInput.trim()) {
         // Query specific transaction hash
-        const receipt = await provider.getTransactionReceipt(txHashInput.trim());
+        let receipt;
+        try {
+          receipt = await provider.getTransactionReceipt(txHashInput.trim());
+        } catch (rpcErr: any) {
+          setResult({
+            status: 'rpcError',
+            errorMessage: `Unable to verify: Blockchain RPC query failed (${rpcErr.message || 'Network error'}).`,
+          });
+          setIsVerifying(false);
+          return;
+        }
 
         if (!receipt) {
           setResult({
             status: 'notFound',
             computedHash,
-            errorMessage: `No transaction receipt found on ${chain.name} for hash ${txHashInput.trim()}.`,
+            errorMessage: `Transaction Not Found: No transaction receipt exists on ${chain.name} for hash ${txHashInput.trim()}.`,
+          });
+          setIsVerifying(false);
+          return;
+        }
+
+        // Verify transaction target matches canonical contract
+        if (receipt.to?.toLowerCase() !== chain.contractAddress.toLowerCase()) {
+          setResult({
+            status: 'invalidContract',
+            errorMessage: `Transaction Target Mismatch: Transaction was sent to ${receipt.to}, not canonical InscribeSoul contract ${chain.contractAddress}.`,
           });
           setIsVerifying(false);
           return;
@@ -131,7 +177,7 @@ export const VerifyPage: React.FC = () => {
           setResult({
             status: 'notFound',
             computedHash,
-            errorMessage: 'Transaction exists, but recorded proof hash does NOT match this author, secret, and content on-chain.',
+            errorMessage: 'Proof Does Not Match: Transaction exists, but recorded proof hash does NOT match this author, secret, and content on-chain.',
           });
         }
       } else {
@@ -151,11 +197,21 @@ export const VerifyPage: React.FC = () => {
           toBlock: 'latest',
         };
 
-        const logs = await provider.getLogs(filter).catch(async () => {
-          const currentBlock = await provider.getBlockNumber().catch(() => 0);
-          const fallbackFromBlock = Math.max(0, currentBlock - 1999);
-          return await provider.getLogs({ ...filter, fromBlock: fallbackFromBlock }).catch(() => []);
-        });
+        let logs: any[] = [];
+        try {
+          logs = await provider.getLogs(filter).catch(async () => {
+            const currentBlock = await provider.getBlockNumber().catch(() => 0);
+            const fallbackFromBlock = Math.max(0, currentBlock - 1999);
+            return await provider.getLogs({ ...filter, fromBlock: fallbackFromBlock }).catch(() => []);
+          });
+        } catch (rpcErr: any) {
+          setResult({
+            status: 'rpcError',
+            errorMessage: `Unable to verify: Blockchain RPC query failed (${rpcErr.message || 'Network error'}).`,
+          });
+          setIsVerifying(false);
+          return;
+        }
 
         if (logs.length > 0) {
           const matchedLog = logs[0];
@@ -179,7 +235,7 @@ export const VerifyPage: React.FC = () => {
           setResult({
             status: 'notFound',
             computedHash,
-            errorMessage: `No matching ${mode === 'private' ? 'Private Proof' : 'Public Inscription'} event found on ${chain.name} for this exact content, author, and secret salt.`,
+            errorMessage: `Proof Does Not Match: No matching ${mode === 'private' ? 'Private Proof' : 'Public Inscription'} event found on ${chain.name} for this exact content, author, and secret salt.`,
           });
         }
       }
@@ -187,7 +243,7 @@ export const VerifyPage: React.FC = () => {
       console.error('Verification error:', err);
       setResult({
         status: 'rpcError',
-        errorMessage: `Blockchain query error: ${err.message || 'RPC node failed to respond'}.`,
+        errorMessage: `Unable to verify: Blockchain RPC query failed (${err.message || 'RPC node failed to respond'}).`,
       });
     } finally {
       setIsVerifying(false);
@@ -350,7 +406,7 @@ export const VerifyPage: React.FC = () => {
         </button>
       </div>
 
-      {/* Result Display */}
+      {/* Result Displays with Distinct Error Categories */}
       {result.status === 'success' && (
         <div className="p-6 bg-emerald-950/20 border border-emerald-800/60 rounded-2xl space-y-4 font-mono text-xs text-emerald-200 shadow-xl">
           <div className="flex items-center gap-3">
@@ -405,7 +461,7 @@ export const VerifyPage: React.FC = () => {
             <XCircle className="w-6 h-6 text-red-400 shrink-0" />
             <div>
               <h3 className="font-serif text-2xl text-red-400 uppercase tracking-wider font-bold">
-                NO MATCH FOUND
+                PROOF DOES NOT MATCH
               </h3>
               <p className="text-[11px] text-stone-300 font-sans mt-0.5">
                 {result.errorMessage || 'No matching event log was found on-chain.'}
@@ -422,12 +478,26 @@ export const VerifyPage: React.FC = () => {
         </div>
       )}
 
+      {result.status === 'invalidContract' && (
+        <div className="p-6 bg-red-950/40 border border-red-700 rounded-2xl space-y-3 font-mono text-xs text-red-200 shadow-xl flex items-start gap-3">
+          <ShieldAlert className="w-6 h-6 text-red-400 shrink-0 mt-0.5" />
+          <div>
+            <h3 className="font-serif text-xl text-red-300 uppercase tracking-wider font-bold mb-1">
+              NOT AN INSCRIBESOUL V1 PROOF
+            </h3>
+            <p className="text-stone-300 text-[11px] leading-relaxed">
+              {result.errorMessage}
+            </p>
+          </div>
+        </div>
+      )}
+
       {result.status === 'rpcError' && (
         <div className="p-6 bg-amber-950/30 border border-amber-800/60 rounded-2xl space-y-3 font-mono text-xs text-amber-200 shadow-xl flex items-start gap-3">
           <WifiOff className="w-6 h-6 text-amber-400 shrink-0 mt-0.5" />
           <div>
             <h3 className="font-serif text-xl text-amber-300 uppercase tracking-wider font-bold mb-1">
-              RPC NETWORK UNREACHABLE
+              UNABLE TO VERIFY — NETWORK/RPC ERROR
             </h3>
             <p className="text-stone-300 text-[11px] leading-relaxed">
               {result.errorMessage}

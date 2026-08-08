@@ -1,7 +1,7 @@
 import React from 'react';
 import { ChainConfig } from '../config/chains';
 import { truncateHash } from '../utils/hashing';
-import { ShieldCheck, Eye, AlertCircle, X, Check, AlertTriangle, Rocket } from 'lucide-react';
+import { ShieldCheck, Eye, AlertCircle, X, Check, AlertTriangle } from 'lucide-react';
 
 interface PreviewModalProps {
   isOpen: boolean;
@@ -12,9 +12,9 @@ interface PreviewModalProps {
   author: string;
   content: string;
   contentHash: string;
+  protocolFeeEth: string;
   isLoading: boolean;
   errorMessage?: string | null;
-  onOpenDeployModal?: () => void;
 }
 
 export const PreviewModal: React.FC<PreviewModalProps> = ({
@@ -26,9 +26,9 @@ export const PreviewModal: React.FC<PreviewModalProps> = ({
   author,
   content,
   contentHash,
+  protocolFeeEth,
   isLoading,
   errorMessage,
-  onOpenDeployModal,
 }) => {
   if (!isOpen) return null;
 
@@ -84,20 +84,20 @@ export const PreviewModal: React.FC<PreviewModalProps> = ({
             </div>
 
             <div className="flex justify-between items-center pt-2 border-t border-stone-800/80">
-              <span className="text-stone-400">Est. Network Fee:</span>
+              <span className="text-stone-400">Est. Network Gas:</span>
               <span className="text-stone-200">{chain.estimatedFeeUsd}</span>
             </div>
 
             <div className="flex justify-between items-center">
-              <span className="text-stone-400">InscribeSoul Fee:</span>
-              <span className="text-emerald-400 font-semibold">$0.00</span>
+              <span className="text-stone-400">InscribeSoul Fee (On-Chain):</span>
+              <span className="text-emerald-400 font-semibold">{protocolFeeEth} ETH</span>
             </div>
           </div>
 
           {/* Mode Warning */}
           {mode === 'private' ? (
             <div className="p-3 bg-amber-950/30 border border-amber-800/40 rounded-lg text-amber-300 text-[11px] leading-relaxed">
-              <strong>PRIVACY CONFIRMED:</strong> Your original text will NOT be published or sent to the blockchain. Only the cryptographic hash above is submitted.
+              <strong>PRIVACY CONFIRMED:</strong> Your original text will NOT be published or sent to the blockchain. Only the cryptographic commitment hash is submitted.
             </div>
           ) : (
             <div className="p-3 bg-red-950/30 border border-red-800/40 rounded-lg text-red-300 text-[11px] leading-relaxed">
@@ -115,19 +115,6 @@ export const PreviewModal: React.FC<PreviewModalProps> = ({
                   {errorMessage}
                 </div>
               </div>
-
-              {errorMessage.includes('No InscribeSoul smart contract is deployed') && onOpenDeployModal && (
-                <button
-                  onClick={() => {
-                    onClose();
-                    onOpenDeployModal();
-                  }}
-                  className="w-full py-2.5 bg-amber-900/80 hover:bg-amber-800 border border-amber-700 text-amber-100 font-mono text-xs uppercase tracking-wider rounded-lg transition-all flex items-center justify-center gap-2 font-bold shadow"
-                >
-                  <Rocket className="w-4 h-4 text-amber-300" />
-                  Deploy Contract Now via Rabby Wallet
-                </button>
-              )}
             </div>
           )}
         </div>
@@ -148,7 +135,7 @@ export const PreviewModal: React.FC<PreviewModalProps> = ({
             className="flex-1 py-3 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-stone-950 font-serif font-bold text-sm tracking-wider uppercase rounded-xl transition-all shadow-lg flex items-center justify-center gap-2"
           >
             {isLoading ? (
-              <span className="animate-pulse">Confirming...</span>
+              <span className="animate-pulse">Processing...</span>
             ) : (
               <>
                 <Check className="w-4 h-4" />

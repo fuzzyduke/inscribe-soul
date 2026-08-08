@@ -7,43 +7,40 @@ export const PRIVATE_DOMAIN = ethers.keccak256(ethers.toUtf8Bytes('INSCRIBESOUL_
 
 /**
  * Generate a cryptographically secure random 32-byte hex string (secret salt).
+ * Throws an explicit error if Web Crypto is unavailable. Never falls back to Math.random().
  */
 export function generateSecret32Bytes(): string {
-  const array = new Uint8Array(32);
   if (typeof window !== 'undefined' && window.crypto && window.crypto.getRandomValues) {
+    const array = new Uint8Array(32);
     window.crypto.getRandomValues(array);
-  } else {
-    for (let i = 0; i < 32; i++) {
-      array[i] = Math.floor(Math.random() * 256);
-    }
+    return ethers.hexlify(array);
   }
-  return ethers.hexlify(array);
+  throw new Error('Web Crypto API (window.crypto.getRandomValues) is unavailable. Private Proof generation requires secure randomness.');
 }
 
 /**
- * Safe address normalizer to handle non-checksummed addresses gracefully.
+ * Validates and checksums an EVM address. Throws explicitly if invalid.
+ * Never substitutes a fallback mock address.
  */
-function safeGetAddress(address: string): string {
-  try {
-    return ethers.getAddress(address);
-  } catch (e) {
-    // If checksum validation fails, convert to lowercase first then checksum
-    try {
-      return ethers.getAddress(address.toLowerCase());
-    } catch (e2) {
-      // Fallback default mock address
-      return '0x918FdB499826a76C247B259920194883A73e2A73';
-    }
+export function validateAndChecksumAddress(address: string): string {
+  if (!address || typeof address !== 'string') {
+    throw new Error('Wallet address is required.');
   }
+  const clean = address.trim();
+  if (!ethers.isAddress(clean)) {
+    throw new Error(`Invalid EVM wallet address: ${address}`);
+  }
+  return ethers.getAddress(clean);
 }
 
 /**
  * Computes Public Proof Hash using exact ABI encoding matching smart contract:
  * keccak256(abi.encode(PUBLIC_DOMAIN, author, content))
+ * Pure, deterministic function. Throws if author address is invalid.
  */
 export function computePublicProofHash(author: string, content: string): string {
+  const cleanAuthor = validateAndChecksumAddress(author);
   const abiCoder = ethers.AbiCoder.defaultAbiCoder();
-  const cleanAuthor = safeGetAddress(author);
   const encoded = abiCoder.encode(
     ['bytes32', 'address', 'string'],
     [PUBLIC_DOMAIN, cleanAuthor, content]
@@ -54,15 +51,25 @@ export function computePublicProofHash(author: string, content: string): string 
 /**
  * Computes Private Proof Commitment Hash using exact ABI encoding matching smart contract:
  * keccak256(abi.encode(PRIVATE_DOMAIN, author, secret, content))
+ * Pure, deterministic function. Throws if author or secret is invalid.
+ * NEVER generates a secret implicitly.
  */
 export function computePrivateCommitmentHash(
   author: string,
   secret: string,
   content: string
 ): string {
+  const cleanAuthor = validateAndChecksumAddress(author);
+  
+  if (!secret || typeof secret !== 'string') {
+    throw new Error('Secret salt key is required for Private Proof commitment hash computation.');
+  }
+  const cleanSecret = secret.trim();
+  if (!cleanSecret.startsWith('0x') || cleanSecret.length !== 66) {
+    throw new Error('Invalid secret salt key format. Secret salt must be a 32-byte hex string (66 characters starting with 0x).');
+  }
+
   const abiCoder = ethers.AbiCoder.defaultAbiCoder();
-  const cleanAuthor = safeGetAddress(author);
-  const cleanSecret = secret && secret.startsWith('0x') && secret.length === 66 ? secret : generateSecret32Bytes();
   const encoded = abiCoder.encode(
     ['bytes32', 'address', 'bytes32', 'string'],
     [PRIVATE_DOMAIN, cleanAuthor, cleanSecret, content]
@@ -96,7 +103,6 @@ export interface InscribeSoulPrivateProofJSON {
 
 /**
  * Export Proof file locally for Private Proof mode.
- * Does not send or upload data anywhere.
  */
 export function exportProofJSON(proof: InscribeSoulPrivateProofJSON) {
   const shortHash = proof.commitmentHash.slice(2, 10);

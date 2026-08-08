@@ -4,8 +4,17 @@
 
 **Target Subdomain**: `inscribesoul.valhallala.com`  
 **Protocol Version**: `INSCRIBESOUL_V1`  
-**Active Testnet**: Base Sepolia (`chainId: 84532`)  
-**Live Deployed Contract**: [`0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346`](https://sepolia.basescan.org/address/0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346)
+
+---
+
+## Deployment Status Matrix
+
+| Network | Status | Canonical Contract Address | Selectable in UI |
+| :--- | :--- | :--- | :--- |
+| **Base Sepolia (Testnet)** | **LIVE TESTNET** | [`0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346`](https://sepolia.basescan.org/address/0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346) | **Yes** |
+| **Base Mainnet** | NOT DEPLOYED | `N/A (Coming Soon)` | No |
+| **Ethereum Sepolia** | NOT DEPLOYED | `N/A (Coming Soon)` | No |
+| **Ethereum Mainnet** | NOT DEPLOYED | `N/A (Coming Soon)` | No |
 
 ---
 
@@ -43,7 +52,6 @@ $$\text{Write} \longrightarrow \text{Choose Privacy Mode} \longrightarrow \text{
 - **Mempool Notice**: Raw text is included in transaction calldata and visible in public mempools before block inclusion.
 - **On-Chain Commitment Formula**:
   $$\text{proofHash} = \text{keccak256}(\text{abi.encode}(\text{PUBLIC\_DOMAIN}, \text{msg.sender}, \text{content}))$$
-  *Note: The smart contract derives `proofHash` on-chain directly from `msg.sender` and `content` to prevent author spoofing.*
 
 ---
 
@@ -54,77 +62,27 @@ $$\text{Write} \longrightarrow \text{Choose Privacy Mode} \longrightarrow \text{
 - **Cryptographic Salt**: Every Private Proof generates a unique, cryptographically secure 32-byte secret salt (`window.crypto.getRandomValues`) to prevent offline dictionary/candidate guessing attacks.
 - **Client-Side Commitment Formula**:
   $$\text{commitmentHash} = \text{keccak256}(\text{abi.encode}(\text{PRIVATE\_DOMAIN}, \text{authorWallet}, \text{secret}, \text{content}))$$
-  where:
-  - $\text{PRIVATE\_DOMAIN} = \text{keccak256}(\text{"INSCRIBESOUL\_PRIVATE\_V1"})$
-  - $\text{authorWallet} = \text{checksummed EVM address}$
-  - $\text{secret} = 32\text{-byte hex string}$
-  - $\text{content} = \text{exact UTF-8 text string (un-normalized)}$
 
 ---
 
-## Smart Contract Specification (`InscribeSoul.sol`)
+## Exact UTF-8 Content Semantics
 
-```solidity
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+InscribeSoul V1 hashes exact UTF-8 content. Any character, whitespace, trailing space, line-ending (CRLF vs LF), or capitalization change creates a completely different proof hash.
 
-contract InscribeSoul {
-    string public constant PROTOCOL_VERSION = "INSCRIBESOUL_V1";
-    bytes32 public immutable PUBLIC_DOMAIN;
-    bytes32 public immutable PRIVATE_DOMAIN;
-
-    event PublicInscription(address indexed author, bytes32 indexed proofHash, string content, uint256 timestamp);
-    event PrivateProof(address indexed author, bytes32 indexed commitmentHash, uint256 timestamp);
-
-    constructor(uint256 _initialProtocolFee) {
-        PUBLIC_DOMAIN = keccak256(abi.encodePacked("INSCRIBESOUL_PUBLIC_V1"));
-        PRIVATE_DOMAIN = keccak256(abi.encodePacked("INSCRIBESOUL_PRIVATE_V1"));
-    }
-
-    function inscribePublic(string calldata content) external payable {
-        bytes32 proofHash = keccak256(abi.encode(PUBLIC_DOMAIN, msg.sender, content));
-        emit PublicInscription(msg.sender, proofHash, content, block.timestamp);
-    }
-
-    function inscribeProof(bytes32 commitmentHash) external payable {
-        emit PrivateProof(msg.sender, commitmentHash, block.timestamp);
-    }
-}
-```
+**Any character, whitespace, encoding-relevant change, or line-ending change produces a different proof.**
 
 ---
 
-## Canonical Blockchain Timestamp & Finality Terminology
+## Smart Contract Specification
 
-1. **Canonical Timestamp Source**:
-   - The official timestamp of record is the **blockchain block timestamp** (`block.timestamp`), obtained directly from the confirmed transaction receipt and block header.
-   - Client-side creation time is strictly informational metadata.
+The canonical Solidity implementation is maintained strictly in [`contracts/InscribeSoul.sol`](file:///c:/Users/graci/.gemini/antigravity-ide/scratch/inscribesoul/contracts/InscribeSoul.sol).
 
-2. **L2 Finality Terminology**:
-   - InscribeSoul strictly adheres to proper L2 terminology.
-   - `tx.wait(1)` is displayed in the UI as **“Confirmed / L2 Included”**, avoiding misleading claims of immediate multi-epoch L1 settlement finality.
-
----
-
-## Cryptographic Proof File Format (`.json`)
-
-Upon completing a Private Proof, the user can export a standalone local `.json` proof file:
-
-```json
-{
-  "protocol": "INSCRIBESOUL_PRIVATE_V1",
-  "content": "My confidential idea text...",
-  "secret": "0xc47e3d928d24613b70253ebe2d5078e0813ce2398e2dd69d00a8c957bfbdc6da",
-  "author": "0x4B6254BCdFf3D98845393f8594B1C5E6Ba6Dc75C",
-  "commitmentHash": "0x796421627c654f1fe3a1f21096d2d85d0722037fd77f1ba4998e64232f5636a6",
-  "chainId": 84532,
-  "transactionHash": "0x5c1debdbd9b0a68598030275f1e3eb8bc0164fffe4cb55fd2ba5da51711293eb",
-  "blockNumber": 45203899,
-  "blockTimestamp": 1786176086,
-  "blockTimestampISO": "2026-08-08T08:41:26.000Z",
-  "contractAddress": "0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346"
-}
-```
+### Overview:
+- **Solidity Version**: `^0.8.20`
+- **Ownership / Admin**: `Ownable` (allows updating `protocolFee` capped by `MAX_PROTOCOL_FEE = 0.1 ether`)
+- **Event Signatures**:
+  - `PublicInscription(address indexed author, bytes32 indexed proofHash, string content, uint256 timestamp)`
+  - `PrivateProof(address indexed author, bytes32 indexed commitmentHash, uint256 timestamp)`
 
 ---
 
@@ -137,7 +95,7 @@ npm install
 # Run Vite dev server
 npm run dev
 
-# Run Hardhat security & integration test suite (26/26 passing)
+# Run Hardhat security & integration test suite
 npx hardhat test
 
 # Build production bundle
