@@ -4,62 +4,128 @@
 
 ---
 
-## 1. Official Deployment Matrix & Historical Registry
+## 1. Scope & Protocol Purpose
+
+InscribeSoul is an intentionally minimalist, non-custodial Web3 protocol that creates permanent, cryptographically verifiable blockchain timestamps.
+
+The protocol provides cryptographic evidence that a specific EVM wallet address publicly inscribed specific content, or committed to specific hidden content, no later than a particular blockchain block timestamp.
+
+---
+
+## 2. Versioning Model & Namespace Separation
+
+InscribeSoul explicitly separates version namespaces to ensure backwards compatibility:
+
+- **Contract Protocol Version** (`PROTOCOL_VERSION()`): `INSCRIBESOUL_V1_1` (identifies active contract bytecode capabilities).
+- **Public Cryptographic Hashing Domain** (`PUBLIC_DOMAIN`): `INSCRIBESOUL_PUBLIC_V1` (`0xc00bd1280f0e33060f3d5a20ee35c0547aed0428775278235daa2a2dc87da9a2`).
+- **Private Cryptographic Hashing Domain** (`PRIVATE_DOMAIN`): `INSCRIBESOUL_PRIVATE_V1` (`0x600839658e1d010994e7bfec2d665e8315b99808c0749aec6e12dcaf62454200`).
+- **Proof Package Format** (`format`): `INSCRIBESOUL_PROOF_PACKAGE_V1`.
+- **Portable Proof Blob Prefix**: `INSCRIBESOUL-PROOF-V1:`.
+
+> **Compatibility Guarantee**: Hashing domains remain identical across V1 and V1.1 deployments. Private Proof commitments generated under V1 recompute identically under V1.1.
+
+---
+
+## 3. Official Deployment Matrix & Historical Registry
+
+Detailed deployment block numbers, contract addresses, and verification receipts are maintained in [`DEPLOYMENTS.md`](DEPLOYMENTS.md).
 
 | Contract Version | Network | Contract Address | Deployment Block | Reveal Support |
 | :--- | :--- | :--- | :--- | :--- |
-| `INSCRIBESOUL_V1` | Base Sepolia (`84532`) | `0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346` | `#45206768` | False |
-| `INSCRIBESOUL_V1_1` | Base Sepolia (`84532`) | `0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB` | `#45207053` | True |
+| `INSCRIBESOUL_V1` | Base Sepolia (`84532`) | [`0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346`](https://sepolia.basescan.org/address/0x6fDFe67228CbB294880cc85DD0Fbca3F2C05b346) | `#45206768` | False |
+| `INSCRIBESOUL_V1_1` | Base Sepolia (`84532`) | [`0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB`](https://sepolia.basescan.org/address/0xdD7317881A75522Cd5B8853003A0f8D6dFA99AcB) | `#45207053` | True |
 
 ---
 
-## 2. Shared Canonical Preflight & Fee Source of Truth
+## 4. Exact Content Semantics
 
-Every transaction preview and signature request for new write operations (Public Inscription, Private Proof, Reveal Proof) performs a unified canonical preflight (`verifyCanonicalContract`):
-
-1. **Network Chain Switch**: Forces wallet network switch to target chain ID before querying contract.
-2. **Bytecode Verification**: Ensures smart contract bytecode exists at `contractAddress`.
-3. **Protocol Version Match**: Validates `PROTOCOL_VERSION()` equals `INSCRIBESOUL_V1_1`.
-4. **Domain Constants Match**: Verifies `PUBLIC_DOMAIN` and `PRIVATE_DOMAIN` match expected constants exactly.
-5. **Fail-Closed Protocol Fee Read**: Reads `protocolFee()` live from RPC. Fails closed with an explicit network error if fee cannot be determined; never falls back to 0 ETH.
+InscribeSoul operates strictly on **exact UTF-8 byte sequences**:
+- **No Whitespace Normalization**: Leading spaces, trailing spaces, tabs (`\t`), line feeds (`\n`), and carriage returns (`\r\n`) are preserved strictly.
+- **No Unicode Normalization**: Unicode string bytes are hashed exactly as input.
+- **No String Trimming**: The protocol never calls `.trim()` on user content. Any modification of whitespace or capitalization produces a completely different cryptographic commitment.
 
 ---
 
-## 3. Chunked Historical Event Retrieval (`getLogsChunked`)
-
-InscribeSoul queries EVM event logs using safe, bounded block ranges (`chunkSize = 1800`) starting from the contract's registered `deploymentBlock`:
-
-- **Historical Log Discovery**: Queries `PublicInscription`, `PrivateProof`, and `ProofRevealed` events chunk by chunk.
-- **Fail-Closed RPC Behavior**: Surfaces RPC errors cleanly with retry capability instead of silently returning empty history.
-- **Deduplication & Order**: Deduplicates by `txHash + index` and sorts strictly by block number and log index ascending.
-
----
-
-## 4. Domain Constants
-
-```solidity
-bytes32 public constant PUBLIC_DOMAIN = keccak256(bytes("INSCRIBESOUL_PUBLIC_V1"));
-// Value: 0xc00bd1280f0e33060f3d5a20ee35c0547aed0428775278235daa2a2dc87da9a2
-
-bytes32 public constant PRIVATE_DOMAIN = keccak256(bytes("INSCRIBESOUL_PRIVATE_V1"));
-// Value: 0x600839658e1d010994e7bfec2d665e8315b99808c0749aec6e12dcaf62454200
-```
-
----
-
-## 5. Cryptographic Hashing Specifications
+## 5. Cryptographic Hashing Algorithms
 
 ### Public Inscription Proof Hash
 
 $$\text{proofHash} = \text{keccak256}(\text{abi.encode}(\text{PUBLIC\_DOMAIN}, \text{authorAddress}, \text{content}))$$
 
-### Private Proof Commitment Hash
-
-$$\text{commitmentHash} = \text{keccak256}(\text{abi.encode}(\text{PRIVATE\_DOMAIN}, \text{authorAddress}, \text{secret}, \text{content}))$$
+- **`PUBLIC_DOMAIN`**: `bytes32`
+- **`authorAddress`**: `address`
+- **`content`**: `string` (exact UTF-8)
 
 ---
 
-## 6. Private Proof Package & Portable Blob Specification
+### Private Proof Commitment Hash (Salted Commitment)
+
+$$\text{commitmentHash} = \text{keccak256}(\text{abi.encode}(\text{PRIVATE\_DOMAIN}, \text{authorAddress}, \text{secret}, \text{content}))$$
+
+- **`PRIVATE_DOMAIN`**: `bytes32`
+- **`authorAddress`**: `address`
+- **`secret`**: `bytes32` (32 random entropy bytes generated via `window.crypto.getRandomValues`)
+- **`content`**: `string` (exact UTF-8)
+
+---
+
+## 6. On-Chain Reveal Algorithm
+
+The Solidity `revealProof()` function unseals a Private Proof on-chain:
+
+1. Recomputes $\text{keccak256}(\text{abi.encode}(\text{PRIVATE\_DOMAIN}, \text{msg.sender}, \text{secret}, \text{content}))$.
+2. Reverts with `CommitmentMismatch()` if recomputed commitment does not equal `originalCommitmentHash`.
+3. Emits `ProofRevealed(author, originalCommitmentHash, originalTransactionHash, secret, content, timestamp)`.
+
+---
+
+## 7. Shared Canonical Preflight & Fee Source of Truth
+
+Every transaction preview and signature request for new write operations executes a unified canonical preflight check (`verifyCanonicalContract`):
+
+1. **Network Chain Switch**: Forces wallet network switch to target chain ID before querying contract.
+2. **Bytecode Verification**: Ensures smart contract bytecode exists at `contractAddress`.
+3. **Protocol Version Match**: Validates `PROTOCOL_VERSION()` equals `INSCRIBESOUL_V1_1`.
+4. **Domain Constants Match**: Verifies `PUBLIC_DOMAIN` and `PRIVATE_DOMAIN` match expected constants.
+5. **Fail-Closed Protocol Fee Read**: Reads `protocolFee()` live from RPC. Fails closed with an explicit network error if fee cannot be determined; never falls back to 0 ETH.
+
+---
+
+## 8. Smart Contract Interface & Events
+
+The canonical Solidity interface is defined in [`contracts/InscribeSoul.sol`](contracts/InscribeSoul.sol):
+
+### View Functions
+- `PROTOCOL_VERSION() external view returns (string)`
+- `PUBLIC_DOMAIN() external view returns (bytes32)`
+- `PRIVATE_DOMAIN() external view returns (bytes32)`
+- `protocolFee() external view returns (uint256)`
+- `MAX_PROTOCOL_FEE() external view returns (uint256)`
+
+### State-Changing Functions
+- `inscribePublic(string calldata content) external payable`
+- `inscribeProof(bytes32 commitmentHash) external payable`
+- `revealProof(bytes32 originalCommitmentHash, bytes32 originalTransactionHash, bytes32 secret, string calldata content) external payable`
+- `setProtocolFee(uint256 newFee) external` (Owner only)
+- `withdrawFees() external` (Owner only)
+
+### Contract Events
+- `event PublicInscription(address indexed author, bytes32 indexed proofHash, string content, uint256 timestamp)`
+- `event PrivateProof(address indexed author, bytes32 indexed commitmentHash, uint256 timestamp)`
+- `event ProofRevealed(address indexed author, bytes32 indexed originalCommitmentHash, bytes32 indexed originalTransactionHash, bytes32 secret, string content, uint256 timestamp)`
+- `event FeeUpdated(uint256 newFee)`
+- `event FeesWithdrawn(address indexed recipient, uint256 amount)`
+
+### Custom Errors
+- `error InsufficientProtocolFee(uint256 provided, uint256 required)`
+- `error CommitmentMismatch()`
+- `error FeeExceedsMaximum(uint256 provided, uint256 maximum)`
+- `error Unauthorized()`
+- `error WithdrawFailed()`
+
+---
+
+## 9. Private Proof Package & Portable Blob Specification
 
 InscribeSoul uses a single canonical `PrivateProofPackage` schema that serializes into two portable recovery representations:
 
@@ -86,53 +152,12 @@ InscribeSoul uses a single canonical `PrivateProofPackage` schema that serialize
 ### Copyable Portable Proof Blob Specification
 
 - **Prefix**: `INSCRIBESOUL-PROOF-V1:`
-- **Encoding**: UTF-8 JSON $\longrightarrow$ Base64URL (url-safe, copy-paste resilient without line wraps or character mangling).
-- **Format**:
-  `INSCRIBESOUL-PROOF-V1:<base64url-encoded-utf8-json>`
-- **Security Property**: The Portable Proof Blob is sensitive recovery material. Anyone with access to it can read the original content and secret salt.
+- **Encoding**: UTF-8 JSON $\longrightarrow$ Base64URL (url-safe, copy-paste resilient without line wraps).
+- **Format**: `INSCRIBESOUL-PROOF-V1:<base64url-encoded-utf8-json>`
+- **Security Property**: Base64URL is an encoding format, NOT encryption. Anyone with access to the Portable Proof Blob can read the original text and secret salt.
 
 ---
 
-## 7. Optional Local Private Labels
+## 10. Official Reproducible Test Vectors
 
-- **Purpose**: Helps users distinguish sealed inscriptions in browser UI.
-- **Privacy Boundary**: `label` is stored **ONLY** locally in browser storage or inside the user's exported `.json` proof / Portable Blob.
-- **Cryptographic Independence**: `label` **NEVER** enters `commitmentHash`, transaction calldata, smart contract events, or backend indexers.
-
----
-
-## 8. Official Test Vectors
-
-Common Parameters across all test vectors:
-- **Author Wallet**: `0x4B6254BCdFf3D98845393f8594B1C5E6Ba6Dc75C`
-- **Secret Salt Key**: `0xc47e3d928d24613b70253ebe2d5078e0813ce2398e2dd69d00a8c957bfbdc6da`
-
-### Vector 1: Plain ASCII
-- **Content**: `"Hello world"`
-- **UTF-8 Hex**: `48656c6c6f20776f726c64`
-- **Expected `proofHash` (Public)**: `0x653e43869146ccf8b6eb91466c77afe3284ca06657df16522f1c0e97d2a508e6`
-- **Expected `commitmentHash` (Private)**: `0xdb1c7d7ab8481c44976cbbfb56024bf78eae04e8d5043a014c4a736216cb56f2`
-
----
-
-### Vector 2: Unicode & Emojis
-- **Content**: `"InscribeSoul 📜⚡ 🔐"`
-- **UTF-8 Hex**: `496e736372696265536f756c20f09f939ce29aa120f09f9490`
-- **Expected `proofHash` (Public)**: `0xee9c0e7743a207b64dff2422c7b9595f5bf06864e3a58325863ebb63083c8b92`
-- **Expected `commitmentHash` (Private)**: `0xb784c1c9bed98748f8dba4a15db5d791f22f30ff734d991120bf79a9fb986829`
-
----
-
-### Vector 3: Multiline LF (`\n`)
-- **Content**: `"Line 1\nLine 2\nLine 3"`
-- **UTF-8 Hex**: `4c696e6520310a4c696e6520320a4c696e652033`
-- **Expected `proofHash` (Public)**: `0x729909023272e351520e74d6d4db463b389d03613e2fdb32fea7a3968414c093`
-- **Expected `commitmentHash` (Private)**: `0x754b9d3d1ab4feed34b232cfb7382c6af6f98c61ca01d5733978a8bdd05a9a4a`
-
----
-
-### Vector 4: Multiline CRLF (`\r\n`)
-- **Content**: `"Line 1\r\nLine 2\r\nLine 3"`
-- **UTF-8 Hex**: `4c696e6520310d0a4c696e6520320d0a4c696e652033`
-- **Expected `proofHash` (Public)**: `0x1ed8f94db42c2d595d480f19448edaeeb795eeb0db3a96038c6b8e28db83ef54`
-- **Expected `commitmentHash` (Private)**: `0x4d9f68b26787c0968a27ed85371208ffea4d121375706017d3c569fcb4099248`
+For implementation-independent test vectors with full ABI-encoded byte payloads, consult [`TEST_VECTORS.md`](TEST_VECTORS.md).
